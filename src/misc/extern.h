@@ -52,6 +52,8 @@ extern CGError SLSTransactionSetWindowTransform(CFTypeRef transaction, uint32_t 
 extern CGError SLSTransactionCommit(CFTypeRef transaction, int synchronous);
 extern CGError SLSTransactionCommitUsingMethod(CFTypeRef transaction, uint32_t method);
 
+extern CGError SLSWindowFreezeWithOptions(int cid, uint32_t wid, CFTypeRef options);
+extern CGError SLSWindowThaw(int cid, uint32_t wid);
 extern CFArrayRef SLSCopySpacesForWindows(int cid, int selector, CFArrayRef window_list);
 extern CGError SLSDisableUpdate(int cid);
 extern CGError SLSReenableUpdate(int cid);

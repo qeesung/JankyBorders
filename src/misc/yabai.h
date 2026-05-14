@@ -1,4 +1,5 @@
 #pragma once
+#include <dispatch/dispatch.h>
 #define _YABAI_INTEGRATION
 
 #ifdef _YABAI_INTEGRATION
@@ -148,9 +149,10 @@ static inline void yabai_proxy_begin(struct table* windows, uint32_t wid, uint32
     payload->real_wid = real_wid;
     payload->settings = *border_get_settings(border);
 
-    pthread_t thread;
-    pthread_create(&thread, NULL, yabai_proxy_begin_proc, payload);
-    pthread_detach(thread);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      yabai_proxy_begin_proc(payload);
+    });
     pthread_mutex_unlock(&border->mutex);
   }
 }
@@ -181,9 +183,9 @@ static inline void yabai_proxy_end(struct table* windows, uint32_t wid, uint32_t
     payload->border_wid = border->wid;
     payload->settings = *border_get_settings(border);
 
-    pthread_t thread;
-    pthread_create(&thread, NULL, yabai_proxy_end_proc, payload);
-    pthread_detach(thread);
+    dispatch_async(dispatch_get_main_queue(), ^{
+      yabai_proxy_end_proc(payload);
+    });
   }
   if (border) pthread_mutex_unlock(&border->mutex);
 }

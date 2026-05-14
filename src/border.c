@@ -1,5 +1,6 @@
 #include "border.h"
 #include "hashtable.h"
+#include "misc/extern.h"
 #include "windows.h"
 #include <pthread.h>
 #include <time.h>
@@ -29,51 +30,12 @@ static bool border_check_too_small(struct border* border, CGRect window_frame) {
   return false;
 }
 
-static bool border_coalesce_resize_and_move_events(struct border* border, CGRect* frame) {
-  if (border->event_buffer.disable_coalescing || pthread_main_np() != 0 || !border->wid) {
-    SLSGetWindowBounds(border->cid, border->target_wid, frame);
-    return true;
-  }
-  int64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW_APPROX);
-  int64_t dt = now - border->event_buffer.last_coalesce_attempt;
-  border->event_buffer.last_coalesce_attempt = now;
-
-  if (border->event_buffer.is_coalescing) return false;
-
-  CGRect window_frame;
-  SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
-  bool coalesceable = (CGPointEqualToPoint(window_frame.origin,
-                                          border->target_bounds.origin)
-                       && !CGSizeEqualToSize(window_frame.size,
-                                             border->target_bounds.size))
-                      ||(!CGPointEqualToPoint(window_frame.origin,
-                                              border->target_bounds.origin)
-                       && CGSizeEqualToSize(window_frame.size,
-                                            border->target_bounds.size)    );
-
-  if (coalesceable && dt > (1ULL << 27)) {
-    border->event_buffer.is_coalescing = true;
-    pthread_mutex_unlock(&border->mutex);
-    usleep(20000);
-    pthread_mutex_lock(&border->mutex);
-    border->event_buffer.is_coalescing = false;
-    if (border->external_proxy_wid) return false;
-    SLSGetWindowBounds(border->cid, border->target_wid, frame);
-    return true;
-  }
-
-  *frame = window_frame;
-  return true;
-}
-
 static bool border_calculate_bounds(struct border* border, CGRect* frame, struct settings* settings) {
   CGRect window_frame;
   if (border->is_proxy) window_frame = border->target_bounds;
-  else if (!border_coalesce_resize_and_move_events(border, &window_frame)) {
-    return false;
-  }
-  border->target_bounds = window_frame;
+  else SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
 
+  border->target_bounds = window_frame;
   border->too_small = border_check_too_small(border, window_frame);
   if (border->too_small) {
     border_hide(border);
@@ -193,6 +155,7 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
   CGContextFlush(border->context);
   CGContextRestoreGState(border->context);
   SLSFlushWindowContentRegion(border->cid, border->wid, NULL);
+  SLSWindowThaw(border->cid, border->wid);
 }
 
 void border_create_window(struct border* border, CGRect frame, bool unmanaged, bool hidpi) {
@@ -241,25 +204,18 @@ void border_update_internal(struct border* border, struct settings* settings) {
 
   bool disabled_update = false;
   if (!CGRectEqualToRect(frame, border->frame)) {
-    CFTypeRef transaction = SLSTransactionCreate(cid);
-    if (!transaction) return;
     disabled_update = true;
     SLSDisableUpdate(cid);
 
     CFTypeRef frame_region;
     CGSNewRegionWithRect(&frame, &frame_region);
-    SLSSetWindowShape(border->cid, border->wid, -9999, -9999, frame_region);
+
+    SLSWindowFreezeWithOptions(border->cid, border->wid, NULL);
+    SLSSetWindowShape(border->cid, border->wid, border->origin.x, border->origin.y, frame_region);
     CFRelease(frame_region);
 
     border->needs_redraw = true;
     border->frame = frame;
-
-    SLSTransactionOrderWindow(transaction,
-                              border->wid,
-                              0,
-                              border->target_wid);
-    SLSTransactionCommit(transaction, 0);
-    CFRelease(transaction);
   }
 
   if (border->needs_redraw) border_draw(border, frame, settings);
@@ -359,11 +315,7 @@ void border_move(struct border* border) {
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
     pthread_mutex_lock(&border->mutex);
     CGRect window_frame;
-    if (!border_coalesce_resize_and_move_events(border, &window_frame)) {
-      pthread_mutex_unlock(&border->mutex);
-      return;
-    }
-
+    SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
     CGPoint origin = { .x = window_frame.origin.x
                             - settings->border_width
                             - BORDER_PADDING,
@@ -386,6 +338,10 @@ void border_move(struct border* border) {
 void border_update(struct border* border, bool try_async) {
   pthread_mutex_lock(&border->mutex);
   struct settings* settings = border_get_settings(border);
+  border_update_internal(border, settings);
+  pthread_mutex_unlock(&border->mutex);
+  return;
+
   if (!border->wid || !try_async) {
     border_update_internal(border, settings);
     pthread_mutex_unlock(&border->mutex);
