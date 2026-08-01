@@ -15,11 +15,12 @@ asan: | bin
 test: | bin
 	clang -std=c99 -Wall -Wextra -O0 -g -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests $(LIBS)
 	./bin/safety_tests
+	clang -std=c99 -Wall -Wextra -O0 -g -ffunction-sections tests/color_style_test.c src/hashtable.c -Wl,-dead_strip $(LIBS) -o bin/color_style_test
+	./bin/color_style_test
 
 test-sanitize: | bin
 	clang -std=c99 -Wall -Wextra -O1 -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/safety_tests_sanitize
-
 bin:
 	mkdir bin
 

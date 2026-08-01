@@ -50,68 +50,71 @@ static bool parse_list(struct table* list, char* token, bool* enabled) {
   return true;
 }
 
-static bool parse_color(struct color_style* style, char* token) {
-  struct color_style parsed = *style;
+static bool parse_gradient(struct color_style* style,
+                           const char* token,
+                           const char* format,
+                           int direction,
+                           bool glow) {
+  uint32_t color1;
+  uint32_t color2;
   int consumed = 0;
-  if (sscanf(token,
-         "=glow(gradient(top_left=0x%x,bottom_right=0x%x))%n",
-         &parsed.gradient.color1,
-         &parsed.gradient.color2,
-         &consumed) == 2 && consumed == (int)strlen(token)) {
-    parsed.stype = COLOR_STYLE_GRADIENT;
-    parsed.glow = true;
-    parsed.gradient.direction = TL_TO_BR;
-    *style = parsed;
+  if (sscanf(token, format, &color1, &color2, &consumed) != 2
+      || consumed != (int)strlen(token)) {
+    return false;
+  }
+
+  style->stype = COLOR_STYLE_GRADIENT;
+  style->glow = glow;
+  style->gradient.direction = direction;
+  style->gradient.color1 = color1;
+  style->gradient.color2 = color2;
+  return true;
+}
+
+static bool parse_solid(struct color_style* style,
+                        const char* token,
+                        const char* format,
+                        bool glow) {
+  uint32_t color;
+  int consumed = 0;
+  if (sscanf(token, format, &color, &consumed) != 1
+      || consumed != (int)strlen(token)) {
+    return false;
+  }
+
+  style->stype = COLOR_STYLE_SOLID;
+  style->glow = glow;
+  style->color = color;
+  return true;
+}
+
+static bool parse_color(struct color_style* style, const char* token) {
+  if (parse_gradient(style,
+                     token,
+                     "=glow(gradient(top_left=0x%x,bottom_right=0x%x))%n",
+                     TL_TO_BR,
+                     true)
+      || parse_gradient(style,
+                        token,
+                        "=glow(gradient(top_right=0x%x,bottom_left=0x%x))%n",
+                        TR_TO_BL,
+                        true)
+      || parse_gradient(style,
+                        token,
+                        "=gradient(top_left=0x%x,bottom_right=0x%x)%n",
+                        TL_TO_BR,
+                        false)
+      || parse_gradient(style,
+                        token,
+                        "=gradient(top_right=0x%x,bottom_left=0x%x)%n",
+                        TR_TO_BL,
+                        false)
+      || parse_solid(style, token, "=glow(0x%x)%n", true)
+      || parse_solid(style, token, "=0x%x%n", false)) {
     return true;
   }
-  else if (sscanf(token,
-              "=glow(gradient(top_right=0x%x,bottom_left=0x%x))%n",
-              &parsed.gradient.color1,
-              &parsed.gradient.color2,
-              &consumed) == 2 && consumed == (int)strlen(token)) {
-    parsed.stype = COLOR_STYLE_GRADIENT;
-    parsed.glow = true;
-    parsed.gradient.direction = TR_TO_BL;
-    *style = parsed;
-    return true;
-  }
-  else if (sscanf(token,
-             "=gradient(top_left=0x%x,bottom_right=0x%x)%n",
-             &parsed.gradient.color1,
-             &parsed.gradient.color2,
-             &consumed) == 2 && consumed == (int)strlen(token)) {
-    parsed.stype = COLOR_STYLE_GRADIENT;
-    parsed.glow = false;
-    parsed.gradient.direction = TL_TO_BR;
-    *style = parsed;
-    return true;
-  }
-  else if (sscanf(token,
-             "=gradient(top_right=0x%x,bottom_left=0x%x)%n",
-             &parsed.gradient.color1,
-             &parsed.gradient.color2,
-             &consumed) == 2 && consumed == (int)strlen(token)) {
-    parsed.stype = COLOR_STYLE_GRADIENT;
-    parsed.glow = false;
-    parsed.gradient.direction = TR_TO_BL;
-    *style = parsed;
-    return true;
-  }
-  else if (sscanf(token, "=glow(0x%x)%n", &parsed.color, &consumed) == 1
-           && consumed == (int)strlen(token)) {
-    parsed.stype = COLOR_STYLE_SOLID;
-    parsed.glow = true;
-    *style = parsed;
-    return true;
-  }
-  else if (sscanf(token, "=0x%x%n", &parsed.color, &consumed) == 1
-           && consumed == (int)strlen(token)) {
-    parsed.stype = COLOR_STYLE_SOLID;
-    parsed.glow = false;
-    *style = parsed;
-    return true;
-  }
-  else printf("[?] Borders: Invalid color argument color%s\n", token);
+
+  printf("[?] Borders: Invalid color argument color%s\n", token);
 
   return false;
 }

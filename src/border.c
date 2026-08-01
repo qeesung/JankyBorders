@@ -55,6 +55,51 @@ static bool border_calculate_bounds(struct border* border, CGRect* frame, struct
   return true;
 }
 
+static void border_add_gradient_glow_path(CGContextRef context,
+                                          CGRect path_rect,
+                                          float inset,
+                                          float corner_radius,
+                                          bool square) {
+  if (square) drawing_add_rect_with_inset(context, path_rect, inset);
+  else drawing_add_rounded_rect(context, path_rect, corner_radius);
+}
+
+static void border_draw_gradient_glow(CGContextRef context,
+                                      const struct gradient* gradient,
+                                      CGRect path_rect,
+                                      float inset,
+                                      float corner_radius,
+                                      float blur_radius,
+                                      bool square) {
+  float a, r, g, b;
+  colors_mix(gradient->color1, gradient->color2, &a, &r, &g, &b);
+  CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, a);
+
+  CGContextSaveGState(context);
+  CGContextSetShadowWithColor(context, CGSizeZero, blur_radius, glow_color);
+  CGColorRelease(glow_color);
+  CGContextSetRGBFillColor(context, 1.0f, 1.0f, 1.0f, 1.0f);
+  CGContextSetRGBStrokeColor(context, 1.0f, 1.0f, 1.0f, 1.0f);
+  border_add_gradient_glow_path(context,
+                                path_rect,
+                                inset,
+                                corner_radius,
+                                square       );
+  if (square) CGContextFillPath(context);
+  else CGContextStrokePath(context);
+
+  CGContextSetShadowWithColor(context, CGSizeZero, 0, NULL);
+  CGContextSetBlendMode(context, kCGBlendModeDestinationOut);
+  border_add_gradient_glow_path(context,
+                                path_rect,
+                                inset,
+                                corner_radius,
+                                square       );
+  if (square) CGContextFillPath(context);
+  else CGContextStrokePath(context);
+  CGContextRestoreGState(context);
+}
+
 static void border_draw(struct border* border, CGRect frame, struct settings* settings) {
   CGContextSaveGState(border->context);
   border->needs_redraw = false;
@@ -113,86 +158,57 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
   }
   drawing_clip_between_rect_and_path(border->context, frame, inner_clip_path);
 
-  if (settings->border_style == BORDER_STYLE_SQUARE) {
-    if (color_style.stype == COLOR_STYLE_SOLID) {
-      if (square_thick_above && color_style.glow) {
-        float a, r, g, b;
-        colors_from_hex(color_style.color, &a, &r, &g, &b);
-        CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, 1.0);
-        CGContextSetShadowWithColor(border->context, CGSizeZero, BORDER_TSMN, glow_color);
-        CGColorRelease(glow_color);
-      }
+  bool square = settings->border_style == BORDER_STYLE_SQUARE;
+  float inset = -settings->border_width / 2.f;
+  float corner_radius = settings->border_style == BORDER_STYLE_ROUND_UNIFORM
+                        ? 9.0
+                        : border->radius;
+
+  if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM) {
+    drawing_draw_rounded_rect_with_inset(border->context,
+                                         path_rect,
+                                         corner_radius,
+                                         true            );
+  }
+
+  if (color_style.stype == COLOR_STYLE_SOLID) {
+    if (square) {
       drawing_draw_square_with_inset(border->context,
                                      path_rect,
-                                     -settings->border_width / 2.f);
-    }
-    else if (color_style.stype == COLOR_STYLE_GRADIENT) {
-      if (color_style.glow) {
-        CGContextSaveGState(border->context);
-        float a, r, g, b;
-        colors_from_hex(color_style.gradient.color1, &a, &r, &g, &b);
-        CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, a);
-        CGContextSetShadowWithColor(border->context, CGSizeZero, square_thick_above ? BORDER_TSMN : 10.0, glow_color);
-        CGColorRelease(glow_color);
-        CGContextSetRGBFillColor(border->context, r, g, b, 1.0f);
-        drawing_add_rect_with_inset(border->context, path_rect, -settings->border_width / 2.f);
-        CGContextFillPath(border->context);
-        CGContextSetShadowWithColor(border->context, CGSizeZero, 0, NULL);
-        CGContextSetBlendMode(border->context, kCGBlendModeDestinationOut);
-        drawing_add_rect_with_inset(border->context, path_rect, -settings->border_width / 2.f);
-        CGContextFillPath(border->context);
-        CGContextRestoreGState(border->context);
-      }
-
-      CGContextSaveGState(border->context);
-      drawing_draw_square_gradient_with_inset(border->context,
-                                              gradient,
-                                              gradient_dir,
-                                              path_rect,
-                                              -settings->border_width / 2.f);
-      CGContextRestoreGState(border->context);
-    }
-  } else {
-    float corner_radius = settings->border_style == BORDER_STYLE_ROUND_UNIFORM ? 9.0 : border->radius;
-
-    if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM) {
-      drawing_draw_rounded_rect_with_inset(border->context,
-                                           path_rect,
-                                           corner_radius,
-                                           true            );
-    }
-
-    if (color_style.stype == COLOR_STYLE_SOLID) {
+                                     inset    );
+    } else {
       drawing_draw_rounded_rect_with_inset(border->context,
                                            path_rect,
                                            corner_radius,
                                            false           );
-    } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
-      if (color_style.glow) {
-        CGContextSaveGState(border->context);
-        float a, r, g, b;
-        colors_from_hex(color_style.gradient.color1, &a, &r, &g, &b);
-        CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, a);
-        CGContextSetShadowWithColor(border->context, CGSizeZero, 10.0, glow_color);
-        CGColorRelease(glow_color);
-        CGContextSetRGBStrokeColor(border->context, r, g, b, 1.0f);
-        drawing_add_rounded_rect(border->context, path_rect, corner_radius);
-        CGContextStrokePath(border->context);
-        CGContextSetShadowWithColor(border->context, CGSizeZero, 0, NULL);
-        CGContextSetBlendMode(border->context, kCGBlendModeDestinationOut);
-        drawing_add_rounded_rect(border->context, path_rect, corner_radius);
-        CGContextStrokePath(border->context);
-        CGContextRestoreGState(border->context);
-      }
+    }
+  } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
+    if (color_style.glow) {
+      float blur_radius = square_thick_above ? BORDER_TSMN : 10.0f;
+      border_draw_gradient_glow(border->context,
+                                &color_style.gradient,
+                                path_rect,
+                                inset,
+                                corner_radius,
+                                blur_radius,
+                                square               );
+    }
 
-      CGContextSaveGState(border->context);
+    CGContextSaveGState(border->context);
+    if (square) {
+      drawing_draw_square_gradient_with_inset(border->context,
+                                              gradient,
+                                              gradient_dir,
+                                              path_rect,
+                                              inset       );
+    } else {
       drawing_draw_rounded_gradient_with_inset(border->context,
                                                gradient,
                                                gradient_dir,
                                                path_rect,
                                                corner_radius  );
-      CGContextRestoreGState(border->context);
     }
+    CGContextRestoreGState(border->context);
   }
   if (gradient) CGGradientRelease(gradient);
 
