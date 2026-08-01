@@ -64,10 +64,8 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
 
   CGGradientRef gradient = NULL;
   CGPoint gradient_dir[2];
-  if (color_style.stype == COLOR_STYLE_SOLID
-     || color_style.stype == COLOR_STYLE_GLOW) {
-    bool glow = color_style.stype == COLOR_STYLE_GLOW;
-    drawing_set_stroke_and_fill(border->context, color_style.color, glow);
+  if (color_style.stype == COLOR_STYLE_SOLID) {
+    drawing_set_stroke_and_fill(border->context, color_style.color, color_style.glow);
   } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
     CGAffineTransform trans = CGAffineTransformMakeScale(frame.size.width,
                                                          frame.size.height);
@@ -95,9 +93,10 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     CGContextRestoreGState(border->context);
     return;
   }
-  if (settings->border_style == BORDER_STYLE_SQUARE
-      && settings->border_order == BORDER_ORDER_ABOVE
-      && settings->border_width >= BORDER_TSMW) {
+  bool square_thick_above = settings->border_style == BORDER_STYLE_SQUARE
+                            && settings->border_order == BORDER_ORDER_ABOVE
+                            && settings->border_width >= BORDER_TSMW;
+  if (square_thick_above) {
     // Inset the frame to overlap the rounding of macOS windows to create a
     // truly square border
     path_rect = CGRectInset(border->drawing_bounds,
@@ -115,18 +114,43 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
   drawing_clip_between_rect_and_path(border->context, frame, inner_clip_path);
 
   if (settings->border_style == BORDER_STYLE_SQUARE) {
-    if (color_style.stype == COLOR_STYLE_SOLID
-       || color_style.stype == COLOR_STYLE_GLOW) {
+    if (color_style.stype == COLOR_STYLE_SOLID) {
+      if (square_thick_above && color_style.glow) {
+        float a, r, g, b;
+        colors_from_hex(color_style.color, &a, &r, &g, &b);
+        CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, 1.0);
+        CGContextSetShadowWithColor(border->context, CGSizeZero, BORDER_TSMN, glow_color);
+        CGColorRelease(glow_color);
+      }
       drawing_draw_square_with_inset(border->context,
                                      path_rect,
                                      -settings->border_width / 2.f);
     }
     else if (color_style.stype == COLOR_STYLE_GRADIENT) {
+      if (color_style.glow) {
+        CGContextSaveGState(border->context);
+        float a, r, g, b;
+        colors_from_hex(color_style.gradient.color1, &a, &r, &g, &b);
+        CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, a);
+        CGContextSetShadowWithColor(border->context, CGSizeZero, square_thick_above ? BORDER_TSMN : 10.0, glow_color);
+        CGColorRelease(glow_color);
+        CGContextSetRGBFillColor(border->context, r, g, b, 1.0f);
+        drawing_add_rect_with_inset(border->context, path_rect, -settings->border_width / 2.f);
+        CGContextFillPath(border->context);
+        CGContextSetShadowWithColor(border->context, CGSizeZero, 0, NULL);
+        CGContextSetBlendMode(border->context, kCGBlendModeDestinationOut);
+        drawing_add_rect_with_inset(border->context, path_rect, -settings->border_width / 2.f);
+        CGContextFillPath(border->context);
+        CGContextRestoreGState(border->context);
+      }
+
+      CGContextSaveGState(border->context);
       drawing_draw_square_gradient_with_inset(border->context,
                                               gradient,
                                               gradient_dir,
                                               path_rect,
                                               -settings->border_width / 2.f);
+      CGContextRestoreGState(border->context);
     }
   } else {
     float corner_radius = settings->border_style == BORDER_STYLE_ROUND_UNIFORM ? 9.0 : border->radius;
@@ -138,18 +162,36 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
                                            true            );
     }
 
-    if (color_style.stype == COLOR_STYLE_SOLID
-       || color_style.stype == COLOR_STYLE_GLOW) {
+    if (color_style.stype == COLOR_STYLE_SOLID) {
       drawing_draw_rounded_rect_with_inset(border->context,
                                            path_rect,
                                            corner_radius,
                                            false           );
     } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
+      if (color_style.glow) {
+        CGContextSaveGState(border->context);
+        float a, r, g, b;
+        colors_from_hex(color_style.gradient.color1, &a, &r, &g, &b);
+        CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, a);
+        CGContextSetShadowWithColor(border->context, CGSizeZero, 10.0, glow_color);
+        CGColorRelease(glow_color);
+        CGContextSetRGBStrokeColor(border->context, r, g, b, 1.0f);
+        drawing_add_rounded_rect(border->context, path_rect, corner_radius);
+        CGContextStrokePath(border->context);
+        CGContextSetShadowWithColor(border->context, CGSizeZero, 0, NULL);
+        CGContextSetBlendMode(border->context, kCGBlendModeDestinationOut);
+        drawing_add_rounded_rect(border->context, path_rect, corner_radius);
+        CGContextStrokePath(border->context);
+        CGContextRestoreGState(border->context);
+      }
+
+      CGContextSaveGState(border->context);
       drawing_draw_rounded_gradient_with_inset(border->context,
                                                gradient,
                                                gradient_dir,
                                                path_rect,
                                                corner_radius  );
+      CGContextRestoreGState(border->context);
     }
   }
   if (gradient) CGGradientRelease(gradient);
@@ -158,8 +200,7 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     CGContextRestoreGState(border->context);
     CGContextSaveGState(border->context);
     color_style = settings->background;
-    if (color_style.stype == COLOR_STYLE_SOLID
-       || color_style.stype == COLOR_STYLE_GLOW) {
+    if (color_style.stype == COLOR_STYLE_SOLID) {
       drawing_draw_filled_path(border->context,
                                inner_clip_path,
                                color_style.color);

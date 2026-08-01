@@ -79,6 +79,8 @@ could be issued.
 	_gradient(top_left=0xAARRGGBB,bottom_right=0xAARRGGBB)_ ++
 	_gradient(top_right=0xAARRGGBB,bottom_left=0xAARRGGBB)_ ++
 	_glow(0xAARRGGBB)_ ++
+	_glow(gradient(top_left=0xAARRGGBB,bottom_right=0xAARRGGBB))_ ++
+	_glow(gradient(top_right=0xAARRGGBB,bottom_left=0xAARRGGBB))_ ++
 (You might need to quote these arguments depending on your shell)
 
 *<application_list>*
