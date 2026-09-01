@@ -19,6 +19,7 @@ JB_LOG_DIR="$JB_USER_HOME/Library/Logs/JankyBorders"
 JB_SOURCE_BINARY="$JB_SOURCE_ROOT/bin/borders"
 JB_SOURCE_MANPAGE="$JB_SOURCE_ROOT/docs/borders.1"
 JB_INFO_PLIST_TEMPLATE="$JB_SOURCE_ROOT/resources/Info.plist.template"
+JB_LOGIN_KEYCHAIN="$JB_USER_HOME/Library/Keychains/login.keychain-db"
 JB_CURRENT_VERSION_LINK="$JB_INSTALL_ROOT/current"
 JB_PREVIOUS_VERSION_LINK="$JB_INSTALL_ROOT/previous"
 JB_SIGNING_IDENTITY_FILE="$JB_INSTALL_ROOT/signing-identity.sha1"
@@ -32,8 +33,29 @@ JB_TEMP_PLIST=""
 JB_TEMP_PLIST_BACKUP=""
 JB_TEMP_LINK_DIR=""
 JB_TEMP_SIGNING_IDENTITY_FILE=""
+JB_TEMP_SIGNING_DIR=""
+JB_NEW_SIGNING_IDENTITY=""
 
 jb_cleanup() {
+  if [[ -n "$JB_NEW_SIGNING_IDENTITY" ]]; then
+    if ! /usr/bin/security delete-identity \
+        -Z "$JB_NEW_SIGNING_IDENTITY" \
+        -t \
+        "$JB_LOGIN_KEYCHAIN" >/dev/null 2>&1; then
+      if ! /usr/bin/security delete-certificate \
+          -Z "$JB_NEW_SIGNING_IDENTITY" \
+          -t \
+          "$JB_LOGIN_KEYCHAIN" >/dev/null 2>&1; then
+        printf 'local-service: could not roll back newly imported signing identity %s\n' \
+          "$JB_NEW_SIGNING_IDENTITY" >&2
+      fi
+    fi
+  fi
+  if [[ -n "$JB_TEMP_SIGNING_DIR" && -d "$JB_TEMP_SIGNING_DIR" ]]; then
+    if [[ "$JB_TEMP_SIGNING_DIR" == "$JB_INSTALL_ROOT/.signing-bootstrap."* ]]; then
+      /bin/rm -R "$JB_TEMP_SIGNING_DIR" 2>/dev/null || true
+    fi
+  fi
   if [[ -n "$JB_TEMP_VERSION_DIR" && -d "$JB_TEMP_VERSION_DIR" ]]; then
     if [[ "$JB_TEMP_VERSION_DIR" == "$JB_INSTALL_ROOT/.install."* ]]; then
       /bin/rm -R "$JB_TEMP_VERSION_DIR" 2>/dev/null || true
@@ -82,6 +104,7 @@ Commands:
   status     Show the installed version and LaunchAgent status
   uninstall  Stop the service and remove managed entry points
   signing-help       Show how to create and configure the local signing identity
+  setup-signing      Create and configure the local signing identity automatically
   signing-status     Validate the configured signing identity
   configure-signing  Save JANKYBORDERS_SIGNING_IDENTITY (a 40-digit SHA-1 fingerprint)
   screen-capture-status   Check permission as the installed signed app
@@ -151,21 +174,48 @@ jb_normalize_signing_identity() {
   printf '%s' "$jb_identity" | /usr/bin/tr '[:lower:]' '[:upper:]'
 }
 
+jb_designated_requirement_for_identity() {
+  local jb_identifier="$1"
+  local jb_identity="$2"
+  local jb_requirement_identity
+
+  jb_requirement_identity="$(printf '%s' "$jb_identity" \
+    | /usr/bin/tr '[:upper:]' '[:lower:]')"
+
+  printf 'identifier "%s" and certificate leaf = H"%s"\n' \
+    "$jb_identifier" \
+    "$jb_requirement_identity"
+}
+
+jb_login_keychain_available() {
+  [[ -f "$JB_LOGIN_KEYCHAIN" && ! -L "$JB_LOGIN_KEYCHAIN" ]] \
+    && /usr/bin/security show-keychain-info "$JB_LOGIN_KEYCHAIN" >/dev/null 2>&1
+}
+
 jb_signing_identity_available() {
   local jb_identity="$1"
 
-  /usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+  jb_login_keychain_available || return 1
+  /usr/bin/security find-identity -v -p codesigning "$JB_LOGIN_KEYCHAIN" 2>/dev/null \
     | /usr/bin/awk \
         -v fingerprint="$jb_identity" \
         -v expected_name="\"$JB_SIGNING_IDENTITY_NAME\"" \
         'toupper($2) == fingerprint && index($0, expected_name) > 0 { found = 1 } END { exit !found }'
 }
 
+jb_valid_named_signing_identities() {
+  jb_login_keychain_available || return 1
+  /usr/bin/security find-identity -v -p codesigning "$JB_LOGIN_KEYCHAIN" 2>/dev/null \
+    | /usr/bin/awk \
+        -v expected_name="\"$JB_SIGNING_IDENTITY_NAME\"" \
+        'index($0, expected_name) > 0 { print toupper($2) }'
+}
+
 jb_read_signing_identity() {
   local jb_raw_identity
 
   [[ -e "$JB_SIGNING_IDENTITY_FILE" ]] \
-    || jb_die "signing identity is not configured; run 'make signing-help' first"
+    || jb_die "signing identity is not configured; run 'make setup-signing' first"
   [[ ! -L "$JB_SIGNING_IDENTITY_FILE" ]] \
     || jb_die "signing identity configuration must not be a symlink: $JB_SIGNING_IDENTITY_FILE"
   [[ -f "$JB_SIGNING_IDENTITY_FILE" ]] \
@@ -187,7 +237,15 @@ jb_signing_help() {
   /bin/cat <<EOF
 JankyBorders local service updates require one stable signing identity.
 
-Create it manually in Keychain Access:
+Recommended one-command setup:
+  make setup-signing
+
+This creates a local-only code-signing identity in your login keychain. macOS
+may prompt you to unlock the keychain and approve a user-level trust setting
+limited to code signing.
+The same setup runs automatically on the first 'make install-service'.
+
+Manual alternative in Keychain Access:
   1. Open Certificate Assistant > Create a Certificate.
   2. Set Name to: $JB_SIGNING_IDENTITY_NAME
   3. Set Identity Type to: Self Signed Root
@@ -196,12 +254,13 @@ Create it manually in Keychain Access:
   6. Finish creation and keep the private key in your login keychain.
 
 Find its 40-digit SHA-1 fingerprint:
-  security find-identity -v -p codesigning
+  security find-identity -v -p codesigning "$JB_LOGIN_KEYCHAIN"
 
 Configure that exact fingerprint:
   make configure-signing JANKYBORDERS_SIGNING_IDENTITY=YOUR_40_HEX_SHA1
 
-The installer never creates, trusts, exports, or falls back from this identity.
+The setup never modifies system/admin trust, never exports the imported private
+key, never grants all applications access, and never replaces an existing item.
 EOF
 }
 
@@ -384,6 +443,7 @@ jb_app_artifact_valid() {
   local jb_actual_digest
   local jb_recorded_requirement
   local jb_actual_requirement
+  local jb_expected_requirement
   local jb_bundle_version
 
   [[ -d "$jb_app" && ! -L "$jb_app" ]] || return 1
@@ -416,15 +476,19 @@ jb_app_artifact_valid() {
 
   jb_identity="$(<"$jb_version_root/SIGNING_IDENTITY_SHA1")"
   jb_identity="$(jb_normalize_signing_identity "$jb_identity")" || return 1
+  jb_expected_requirement="$(jb_designated_requirement_for_identity \
+    "$JB_SERVICE_LABEL" \
+    "$jb_identity")" || return 1
   /usr/bin/codesign --verify --strict "$jb_app" >/dev/null 2>&1 || return 1
   [[ "$(jb_codesign_identifier "$jb_app")" == "$JB_SERVICE_LABEL" ]] || return 1
   /usr/bin/codesign --verify --strict \
-    "-R=certificate leaf = H\"$jb_identity\"" "$jb_app" >/dev/null 2>&1 \
+    "-R=$jb_expected_requirement" "$jb_app" >/dev/null 2>&1 \
     || return 1
 
   jb_recorded_requirement="$(<"$jb_version_root/DESIGNATED_REQUIREMENT")"
   jb_actual_requirement="$(jb_codesign_designated_requirement "$jb_app")" || return 1
-  [[ -n "$jb_recorded_requirement" && "$jb_recorded_requirement" == "$jb_actual_requirement" ]] || return 1
+  [[ "$jb_recorded_requirement" == "$jb_expected_requirement" ]] || return 1
+  [[ "$jb_actual_requirement" == "$jb_expected_requirement" ]] || return 1
 
   jb_recorded_digest="$(<"$jb_version_root/INSTALLED_BINARY_SHA256")"
   jb_actual_digest="$(/usr/bin/shasum -a 256 "$jb_binary" | /usr/bin/awk '{print $1}')"
@@ -504,16 +568,8 @@ jb_assert_designated_requirement_compatible() {
     || jb_die "new app has an incompatible designated requirement; the running service was not stopped"
 }
 
-jb_configure_signing() {
-  local jb_requested_identity="${JANKYBORDERS_SIGNING_IDENTITY:-}"
-
-  [[ -n "$jb_requested_identity" ]] \
-    || jb_die "JANKYBORDERS_SIGNING_IDENTITY must be set to the certificate's 40-digit SHA-1 fingerprint"
-  if ! jb_requested_identity="$(jb_normalize_signing_identity "$jb_requested_identity")"; then
-    jb_die "JANKYBORDERS_SIGNING_IDENTITY must be exactly 40 hexadecimal digits"
-  fi
-  jb_signing_identity_available "$jb_requested_identity" \
-    || jb_die "$jb_requested_identity is not a valid '$JB_SIGNING_IDENTITY_NAME' code-signing identity with a private key"
+jb_persist_signing_identity() {
+  local jb_requested_identity="$1"
 
   jb_assert_managed_v2_identity_compatible "$jb_requested_identity"
   [[ ! -L "$JB_SIGNING_IDENTITY_FILE" ]] \
@@ -526,7 +582,189 @@ jb_configure_signing() {
   printf '%s\n' "$jb_requested_identity" >"$JB_TEMP_SIGNING_IDENTITY_FILE"
   /bin/mv -f "$JB_TEMP_SIGNING_IDENTITY_FILE" "$JB_SIGNING_IDENTITY_FILE"
   JB_TEMP_SIGNING_IDENTITY_FILE=""
+}
+
+jb_configure_signing() {
+  local jb_requested_identity="${JANKYBORDERS_SIGNING_IDENTITY:-}"
+
+  [[ -n "$jb_requested_identity" ]] \
+    || jb_die "JANKYBORDERS_SIGNING_IDENTITY must be set to the certificate's 40-digit SHA-1 fingerprint"
+  if ! jb_requested_identity="$(jb_normalize_signing_identity "$jb_requested_identity")"; then
+    jb_die "JANKYBORDERS_SIGNING_IDENTITY must be exactly 40 hexadecimal digits"
+  fi
+  jb_signing_identity_available "$jb_requested_identity" \
+    || jb_die "$jb_requested_identity is not a valid '$JB_SIGNING_IDENTITY_NAME' code-signing identity with a private key"
+  jb_persist_signing_identity "$jb_requested_identity"
   jb_info "configured signing identity $jb_requested_identity"
+}
+
+jb_setup_signing() {
+  local jb_existing_identities
+  local jb_existing_count
+  local jb_existing_identity
+  local jb_old_umask
+  local jb_private_key_pem
+  local jb_restore_xtrace=0
+  local jb_certificate
+  local jb_fingerprint
+  local jb_probe
+  local jb_probe_requirement
+  local jb_query_status
+
+  jb_login_keychain_available \
+    || jb_die "login keychain is unavailable, invalid, or symlinked: $JB_LOGIN_KEYCHAIN"
+
+  if [[ -e "$JB_SIGNING_IDENTITY_FILE" || -L "$JB_SIGNING_IDENTITY_FILE" ]]; then
+    jb_require_configured_signing_identity
+    jb_info "signing identity is already configured: $JB_SIGNING_IDENTITY"
+    return 0
+  fi
+
+  if ! jb_existing_identities="$(jb_valid_named_signing_identities)"; then
+    jb_die "could not inspect code-signing identities in the login keychain"
+  fi
+  if [[ -n "$jb_existing_identities" ]]; then
+    jb_existing_count="$(printf '%s\n' "$jb_existing_identities" \
+      | /usr/bin/awk 'NF { count++ } END { print count + 0 }')"
+    [[ "$jb_existing_count" == "1" ]] \
+      || jb_die "multiple valid '$JB_SIGNING_IDENTITY_NAME' identities exist; configure one exact fingerprint manually"
+    jb_existing_identity="$(printf '%s\n' "$jb_existing_identities" | /usr/bin/awk 'NF { print; exit }')"
+    jb_persist_signing_identity "$jb_existing_identity"
+    jb_info "configured signing identity $jb_existing_identity"
+    jb_info "reused the existing login-keychain identity"
+    return 0
+  fi
+
+  if /usr/bin/security find-certificate \
+      -c "$JB_SIGNING_IDENTITY_NAME" \
+      "$JB_LOGIN_KEYCHAIN" >/dev/null 2>&1; then
+    jb_die "an unusable '$JB_SIGNING_IDENTITY_NAME' certificate already exists; inspect it in the login keychain instead of overwriting it"
+  else
+    jb_query_status=$?
+    [[ "$jb_query_status" == "44" ]] \
+      || jb_die "could not inspect certificates in the login keychain"
+  fi
+  jb_old_umask="$(umask)"
+  umask 077
+  JB_TEMP_SIGNING_DIR="$(/usr/bin/mktemp -d "$JB_INSTALL_ROOT/.signing-bootstrap.XXXXXX")"
+  umask "$jb_old_umask"
+  /bin/chmod 0700 "$JB_TEMP_SIGNING_DIR"
+  jb_certificate="$JB_TEMP_SIGNING_DIR/identity.pem"
+  jb_probe="$JB_TEMP_SIGNING_DIR/signing-probe"
+
+  jb_info "creating a local-only code-signing identity in the login keychain"
+  # Keep the private key in shell memory and anonymous pipes only. Disable
+  # tracing around the secret so `bash -x` cannot print it.
+  ulimit -c 0 || jb_die "could not disable core dumps during key generation"
+  if [[ "$-" == *x* ]]; then
+    set +x
+    jb_restore_xtrace=1
+  fi
+  if ! jb_private_key_pem="$(/usr/bin/openssl genrsa 3072 2>/dev/null)"; then
+    jb_die "could not generate the local private key"
+  fi
+  printf '%s\n' "$jb_private_key_pem" | /usr/bin/openssl req \
+    -new \
+    -x509 \
+    -key /dev/stdin \
+    -sha256 \
+    -days 3650 \
+    -subj "/CN=$JB_SIGNING_IDENTITY_NAME" \
+    -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+    -addext 'keyUsage=critical,digitalSignature,keyCertSign' \
+    -addext 'extendedKeyUsage=critical,1.3.6.1.5.5.7.3.3' \
+    -addext 'subjectKeyIdentifier=hash' \
+    -addext 'authorityKeyIdentifier=keyid:always' \
+    -out "$jb_certificate" >/dev/null 2>&1 \
+    || jb_die "could not generate the local code-signing identity"
+  /bin/chmod 0600 "$jb_certificate"
+
+  jb_fingerprint="$(/usr/bin/openssl x509 \
+    -in "$jb_certificate" \
+    -noout \
+    -fingerprint \
+    -sha1 \
+    | /usr/bin/awk -F= 'NF == 2 { print $2 }' \
+    | /usr/bin/tr -d ':')"
+  if ! jb_fingerprint="$(jb_normalize_signing_identity "$jb_fingerprint")"; then
+    jb_die "generated certificate did not have a valid SHA-1 fingerprint"
+  fi
+
+  JB_NEW_SIGNING_IDENTITY="$jb_fingerprint"
+  /usr/bin/security import "$jb_certificate" \
+    -k "$JB_LOGIN_KEYCHAIN" \
+    -t cert \
+    -f openssl >/dev/null \
+    || jb_die "could not import the local signing certificate into the login keychain"
+  if ! printf '%s\n' "$jb_private_key_pem" | /usr/bin/security import /dev/stdin \
+      -k "$JB_LOGIN_KEYCHAIN" \
+      -t priv \
+      -f openssl \
+      -x \
+      -T /usr/bin/codesign >/dev/null; then
+    unset jb_private_key_pem
+    if [[ "$jb_restore_xtrace" == "1" ]]; then
+      set -x
+    fi
+    jb_die "could not import the local private key into the login keychain"
+  fi
+  unset jb_private_key_pem
+  if [[ "$jb_restore_xtrace" == "1" ]]; then
+    set -x
+  fi
+
+  jb_info "macOS may now prompt you to approve this identity for code signing"
+  /usr/bin/security add-trusted-cert \
+    -r trustRoot \
+    -p codeSign \
+    -k "$JB_LOGIN_KEYCHAIN" \
+    "$jb_certificate" >/dev/null \
+    || jb_die "code-signing trust was not approved; the new identity will be removed"
+
+  /usr/bin/security verify-cert \
+    -q \
+    -L \
+    -l \
+    -p codeSign \
+    -c "$jb_certificate" \
+    -k "$JB_LOGIN_KEYCHAIN" \
+    || jb_die "the new identity did not pass code-signing trust verification"
+  jb_signing_identity_available "$jb_fingerprint" \
+    || jb_die "the new identity is not available for code signing"
+
+  /bin/cp /usr/bin/true "$jb_probe"
+  /bin/chmod 0700 "$jb_probe"
+  jb_probe_requirement="$(jb_designated_requirement_for_identity \
+    "$JB_SERVICE_LABEL.signing-probe" \
+    "$jb_fingerprint")"
+  /usr/bin/codesign \
+    --force \
+    --timestamp=none \
+    --keychain "$JB_LOGIN_KEYCHAIN" \
+    --sign "$jb_fingerprint" \
+    --identifier "$JB_SERVICE_LABEL.signing-probe" \
+    "-r=designated => $jb_probe_requirement" \
+    "$jb_probe" >/dev/null 2>&1 \
+    || jb_die "the new private key could not sign a local probe"
+  /usr/bin/codesign --verify --strict \
+    "-R=$jb_probe_requirement" \
+    "$jb_probe" >/dev/null 2>&1 \
+    || jb_die "the local signing probe did not verify"
+  [[ "$(jb_codesign_designated_requirement "$jb_probe")" == "$jb_probe_requirement" ]] \
+    || jb_die "the local signing probe has an unexpected designated requirement"
+
+  /bin/rm "$jb_certificate" "$jb_probe" \
+    || jb_die "could not remove temporary signing material"
+  /bin/rmdir "$JB_TEMP_SIGNING_DIR" \
+    || jb_die "could not remove the temporary signing directory"
+  JB_TEMP_SIGNING_DIR=""
+
+  jb_enter_critical_section
+  jb_persist_signing_identity "$jb_fingerprint"
+  JB_NEW_SIGNING_IDENTITY=""
+  jb_leave_critical_section
+  jb_info "configured signing identity $jb_fingerprint"
+  jb_info "created a stable local signing identity: $jb_fingerprint"
 }
 
 jb_validate_managed_plist() {
@@ -673,15 +911,22 @@ jb_install_version() {
       "$(/usr/bin/git -C "$JB_SOURCE_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)" \
       >"$JB_TEMP_VERSION_DIR/REVISION"
 
-    /usr/bin/codesign --force --timestamp=none --sign "$JB_SIGNING_IDENTITY" \
-      --identifier "$JB_SERVICE_LABEL" "$jb_temp_app" >/dev/null
-    /usr/bin/codesign --verify --strict "$jb_temp_app"
+    jb_designated_requirement="$(jb_designated_requirement_for_identity \
+      "$JB_SERVICE_LABEL" \
+      "$JB_SIGNING_IDENTITY")"
+    /usr/bin/codesign \
+      --force \
+      --timestamp=none \
+      --keychain "$JB_LOGIN_KEYCHAIN" \
+      --sign "$JB_SIGNING_IDENTITY" \
+      --identifier "$JB_SERVICE_LABEL" \
+      "-r=designated => $jb_designated_requirement" \
+      "$jb_temp_app" >/dev/null
     /usr/bin/codesign --verify --strict \
-      "-R=certificate leaf = H\"$JB_SIGNING_IDENTITY\"" "$jb_temp_app" >/dev/null
-    jb_designated_requirement="$(jb_codesign_designated_requirement "$jb_temp_app")" \
-      || jb_die "could not read the signed app's designated requirement"
-    [[ -n "$jb_designated_requirement" ]] \
-      || jb_die "the signed app has an empty designated requirement"
+      "-R=$jb_designated_requirement" \
+      "$jb_temp_app" >/dev/null
+    [[ "$(jb_codesign_designated_requirement "$jb_temp_app")" == "$jb_designated_requirement" ]] \
+      || jb_die "the signed app has an unexpected designated requirement"
     printf '%s\n' "$jb_designated_requirement" >"$JB_TEMP_VERSION_DIR/DESIGNATED_REQUIREMENT"
     jb_installed_digest="$(/usr/bin/shasum -a 256 "$jb_temp_binary" | /usr/bin/awk '{print $1}')"
     printf '%s\n' "$jb_installed_digest" >"$JB_TEMP_VERSION_DIR/INSTALLED_BINARY_SHA256"
@@ -1053,6 +1298,7 @@ jb_install() {
   if [[ -L "$JB_STABLE_MANPAGE" ]]; then
     jb_old_stable_manpage="$(/usr/bin/readlink "$JB_STABLE_MANPAGE")"
   fi
+  jb_setup_signing
   jb_install_version
   jb_assert_designated_requirement_compatible "$JB_INSTALLED_VERSION_ROOT"
   jb_new_schema="$(jb_artifact_schema "$JB_INSTALLED_VERSION_ROOT")" \
@@ -1261,7 +1507,7 @@ jb_require_supported_environment
 JB_ACTION="${1:-}"
 
 case "$JB_ACTION" in
-  install|start|stop|restart|rollback|uninstall|configure-signing|screen-capture-status|request-screen-capture)
+  install|start|stop|restart|rollback|uninstall|setup-signing|configure-signing|screen-capture-status|request-screen-capture)
     jb_acquire_lock
     ;;
 esac
@@ -1295,6 +1541,9 @@ case "$JB_ACTION" in
     ;;
   signing-help)
     jb_signing_help
+    ;;
+  setup-signing)
+    jb_setup_signing
     ;;
   signing-status)
     jb_signing_status

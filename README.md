@@ -21,34 +21,29 @@ brew install borders
 
 #### Install this fork as a user service
 
-The local service is packaged as a versioned `JankyBorders.app`. Before the
-first installation, create and configure one stable local code-signing
-identity. This lets macOS associate screen-recording permission with the same
-application identity across updates and rollbacks.
-
-Start with the guided setup instructions:
+The local service is packaged as a versioned `JankyBorders.app`. To install the
+current checkout instead of the upstream Homebrew build, use:
 
 ```bash
-make signing-help
-```
-
-Create the requested `JankyBorders Local Code Signing` certificate manually in
-Keychain Access, then configure its exact 40-digit SHA-1 fingerprint and verify
-it:
-
-```bash
-make configure-signing JANKYBORDERS_SIGNING_IDENTITY=YOUR_40_HEX_SHA1
-make signing-status
-```
-
-The installer never creates, trusts, exports, or silently replaces this
-identity. To install the current checkout instead of the upstream Homebrew
-build, use:
-
-```bash
-brew services stop borders # safe when the Homebrew service is already stopped
 make install-service
 ```
+
+If the installer reports that the Homebrew service is running, stop it once
+with `brew services stop borders`, then run `make install-service` again.
+
+On the first installation, this automatically creates one stable,
+local-only code-signing identity in your login keychain. macOS may prompt you
+to unlock the keychain and approve a user-level trust setting limited to code
+signing; no Keychain Access wizard is required. The identity lets macOS
+associate screen-recording permission with the same application across updates
+and rollbacks. It is not a Developer ID and is not suitable for distributing
+the app to other Macs.
+
+Run `make setup-signing` if you want to prepare the identity without installing
+the service. `make signing-help` documents the optional manual path. Automatic
+setup never changes system/admin trust, never grants every application private
+key access, never writes the generated private key to a regular file, and
+refuses to overwrite an existing item with the same name.
 
 This builds the current source, installs the signed and versioned app below
 `$HOME/.local/opt/jankyborders`, updates `$HOME/.local/bin/borders`, and starts

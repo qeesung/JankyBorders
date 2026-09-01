@@ -97,6 +97,9 @@ service-status:
 signing-help:
 	@/bin/bash scripts/local-service signing-help
 
+setup-signing:
+	@/bin/bash scripts/local-service setup-signing
+
 configure-signing:
 	@JANKYBORDERS_SIGNING_IDENTITY="$(JANKYBORDERS_SIGNING_IDENTITY)" /bin/bash scripts/local-service configure-signing
 
@@ -118,4 +121,4 @@ bin:
 clean:
 	rm -rf bin
 
-.PHONY: all debug warnings asan test test-sanitize test-thread clean install-service update-service service-start service-stop service-restart rollback-service service-status signing-help configure-signing signing-status screen-capture-status request-screen-capture uninstall-service
+.PHONY: all debug warnings asan test test-sanitize test-thread clean install-service update-service service-start service-stop service-restart rollback-service service-status signing-help setup-signing configure-signing signing-status screen-capture-status request-screen-capture uninstall-service

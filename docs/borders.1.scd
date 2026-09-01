@@ -156,17 +156,23 @@ $HOME/.config/borders/bordersrc, or the legacy $HOME/.bordersrc path.
 
 # LOCAL SERVICE
 
-When building this fork from its source checkout, create and configure one
-stable local code-signing identity before the first service installation:
+When building this fork from its source checkout, _make install-service_
+performs the complete first-time setup. It automatically creates a stable,
+local-only code-signing identity in the login keychain. macOS may prompt you to
+unlock the keychain and approve a user-level trust setting limited to code
+signing; the Keychain Access certificate wizard is not required.
 
-	_make signing-help_ ++
-	_make configure-signing JANKYBORDERS_SIGNING_IDENTITY=YOUR_40_HEX_SHA1_ ++
-	_make signing-status_
+Use _make setup-signing_ to prepare the identity without installing the
+service. _make signing-help_ documents the optional manual path, and
+_make signing-status_ validates the result. Automatic setup never changes
+system/admin trust, never grants every application private-key access, never
+writes the generated private key to a regular file, and refuses to overwrite
+an existing item with the same name.
 
-The installer packages a versioned _JankyBorders.app_ and never creates,
-trusts, exports, or silently replaces the configured identity. The stable
-application identity is intended to preserve macOS screen-recording permission
-across compatible updates and rollbacks.
+The installer packages a versioned _JankyBorders.app_. The stable application
+identity is intended to preserve macOS screen-recording permission across
+compatible updates and rollbacks. It is not a Developer ID and is not suitable
+for distribution to other Macs.
 
 Manage the per-user LaunchAgent with:
 
