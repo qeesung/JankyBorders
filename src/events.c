@@ -3,6 +3,7 @@
 #include "windows.h"
 #include "border.h"
 #include "misc/window.h"
+#include "space_recovery.h"
 #include <string.h>
 
 extern struct table g_windows;
@@ -54,6 +55,7 @@ static void window_spawn_handler(uint32_t event,
   if (event == EVENT_WINDOW_CREATE) {
     if (windows_window_create(windows, wid, sid)) {
       debug("Window Created: %d %d\n", wid, sid);
+      events_schedule_space_refresh();
       windows_determine_and_focus_active_window(windows);
     }
   } else if (event == EVENT_WINDOW_DESTROY) {
@@ -116,11 +118,35 @@ static void front_app_handler() {
   });
 }
 
+static volatile uint64_t space_change_generation;
+
+void events_schedule_space_refresh(void) {
+  // Native-fullscreen transitions publish their window and Space changes at
+  // different times, and a newly created helper may not yet be registered when
+  // its first move is submitted. Retry a bounded number of consistency scans,
+  // cancelling the older series when a newer refresh begins. The blocks only
+  // retain a generation value and the process-lifetime window table, never a
+  // border pointer that could have been destroyed before the delay expires.
+  uint64_t generation = __sync_add_and_fetch(&space_change_generation, 1);
+
+  for (size_t i = 0; i < SPACE_CHANGE_RETRY_COUNT; ++i) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 space_change_retry_delays_us[i]
+                                 * NSEC_PER_USEC),
+                   dispatch_get_main_queue(), ^{
+      if (!space_change_retry_is_current(
+              __sync_fetch_and_add(&space_change_generation, 0),
+              generation)) {
+        return;
+      }
+      windows_draw_borders_on_current_spaces(&g_windows);
+      windows_determine_and_focus_active_window(&g_windows);
+    });
+  }
+}
+
 static void space_handler() {
-  // Not all native-fullscreen windows have yet updated their space id...
-  DELAY_ASYNC_EXEC_ON_MAIN_THREAD(20000, {
-    windows_draw_borders_on_current_spaces(&g_windows);
-  });
+  events_schedule_space_refresh();
 }
 
 void events_register(int cid) {

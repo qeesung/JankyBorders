@@ -21,6 +21,13 @@ API, thereby being faster than comparable tools.
 	Specifies the style of the border (either _round_, _square_, _uniform_, or
 	_none_)
 
+*position=<position>*
+	Controls where the border is drawn relative to the window edge. _inside_
+	draws entirely over the window, _center_ straddles the edge, and _outside_
+	draws entirely beyond it. The default _auto_ preserves the traditional
+	appearance, but moves individual edges inside when they would be clipped by
+	the display boundary.
+
 *active_color=<color>*
 	Sets the border color for the focused window (format: _0xAARRGGBB_). For
 	instance, active_color=0xff00ff00 creates a green border.
@@ -79,6 +86,9 @@ $HOME/.config/borders/bordersrc, or the legacy $HOME/.bordersrc path.
 	Either _round_, _square_, _uniform_, or _none_. The _none_ style disables
 	borders without stopping the running process, so a later style update can
 	enable them again.
+
+*<position>*
+	Either _auto_, _inside_, _center_, or _outside_.
 
 *<color>*
 	A color formatted as _0xAARRGGBB_, where _A_ is the alpha channel, _R_ the

@@ -47,6 +47,7 @@ struct settings g_settings = { .enabled = true,
                                .border_width = 4.f,
                                .blur_radius = 0,
                                .border_style = BORDER_STYLE_ROUND,
+                               .border_position = BORDER_POSITION_AUTO,
                                .hidpi = false,
                                .show_background = false,
                                .border_order = BORDER_ORDER_BELOW,
@@ -254,6 +255,7 @@ int main(int argc, char** argv) {
   }
 
   windows_add_existing_windows(&g_windows);
+  events_schedule_space_refresh();
 
   if (!mach_server_begin(&g_mach_server, message_handler)) {
     error("[!] Borders: Failed to start command server\n");

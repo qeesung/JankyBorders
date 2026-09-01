@@ -389,6 +389,11 @@ static uint32_t parse_settings_internal(struct settings* settings,
         printf("[?] Borders: Invalid argument '%s'\n", arguments[i]);
       }
     }
+    else if (str_starts_with(arguments[i], "position=")
+             && border_position_parse(arguments[i] + strlen("position="),
+                                      &settings->border_position)) {
+      update_mask |= BORDER_UPDATE_MASK_ALL;
+    }
     else if (strcmp(arguments[i], "hidpi=on") == 0) {
       update_mask |= BORDER_UPDATE_MASK_RECREATE_ALL;
       settings->hidpi = true;

@@ -339,6 +339,21 @@ void windows_determine_and_focus_active_window(struct table* windows) {
 
 void windows_draw_borders_on_current_spaces(struct table* windows) {
   debug("Space Change: Consistency check\n");
+
+  // Refresh every tracked window first. A native-fullscreen window can be
+  // absent from the current-Space query while WindowServer is moving it, but
+  // its direct Space lookup may already expose the new SID.
+  for (int i = 0; i < windows->capacity; ++i) {
+    struct bucket* bucket = windows->buckets[i];
+    while (bucket) {
+      if (bucket->value) {
+        border_retry_space_migration(bucket->value);
+        border_update(bucket->value, true);
+      }
+      bucket = bucket->next;
+    }
+  }
+
   int cid = SLSMainConnectionID();
 
   // Space events are intentionally handled through the caller's delayed
@@ -397,8 +412,7 @@ void windows_draw_borders_on_current_spaces(struct table* windows) {
           if (window_suitable(iterator)) {
             uint32_t wid = SLSWindowIteratorGetWindowID(iterator);
             struct border* border = table_find(windows, &wid);
-            if (border) border_update(border, true);
-            else {
+            if (!border) {
               debug("Creating Missing Window: %d\n", wid);
               windows_window_create(windows, wid, window_space_id(cid, wid));
             }

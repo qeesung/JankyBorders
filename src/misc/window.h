@@ -2,6 +2,7 @@
 #include "extern.h"
 #include "helpers.h"
 #include "space.h"
+#include "../space_bridge.h"
 #include "../window_policy.h"
 
 static inline bool window_suitable(CFTypeRef iterator) {
@@ -83,7 +84,7 @@ static inline uint32_t get_front_window(int cid) {
   return wid;
 }
 
-static inline uint64_t window_space_id(int cid, uint32_t wid) {
+static inline uint64_t window_direct_space_id(int cid, uint32_t wid) {
   uint64_t sid = 0;
 
   CFArrayRef window_list_ref = cfarray_of_cfnumbers(&wid,
@@ -99,16 +100,31 @@ static inline uint64_t window_space_id(int cid, uint32_t wid) {
 
   if (space_list_ref) {
     int count = CFArrayGetCount(space_list_ref);
-    if (count > 0) {
+    for (int i = 0; i < count; ++i) {
       CFNumberRef id_ref = (CFNumberRef)CFArrayGetValueAtIndex(space_list_ref,
-                                                               0             );
-      if (id_ref && CFGetTypeID(id_ref) == CFNumberGetTypeID()) {
-        CFNumberGetValue(id_ref, kCFNumberSInt64Type, &sid);
+                                                               i             );
+      if (!id_ref || CFGetTypeID(id_ref) != CFNumberGetTypeID()) continue;
+      uint64_t candidate_sid = 0;
+      if (!CFNumberGetValue(id_ref,
+                            kCFNumberSInt64Type,
+                            &candidate_sid)) {
+        continue;
+      }
+      if (!sid) sid = candidate_sid;
+      if (is_space_visible(cid, candidate_sid)) {
+        sid = candidate_sid;
+        break;
       }
     }
     CFRelease(space_list_ref);
   }
   CFRelease(window_list_ref);
+
+  return sid;
+}
+
+static inline uint64_t window_space_id(int cid, uint32_t wid) {
+  uint64_t sid = window_direct_space_id(cid, wid);
 
   if (sid) return sid;
 
@@ -208,7 +224,7 @@ static inline int window_level(int cid, uint32_t wid) {
   return level;
 }
 
-static inline void window_send_to_space(int cid, uint32_t wid, uint32_t sid) {
+static inline void window_send_to_space(int cid, uint32_t wid, uint64_t sid) {
   CFArrayRef window_list = cfarray_of_cfnumbers(&wid,
                                                 sizeof(uint32_t),
                                                 1,
@@ -217,6 +233,20 @@ static inline void window_send_to_space(int cid, uint32_t wid, uint32_t sid) {
 
   SLSMoveWindowsToManagedSpace(cid, window_list, sid);
   CFRelease(window_list);
+}
+
+static inline void window_recover_to_space(int cid,
+                                           uint32_t wid,
+                                           uint64_t sid) {
+  if (__builtin_available(macOS 14.5, *)) {
+    // The private bridged operation is reserved for a helper whose actual SID
+    // was verified to differ from its target. Submission is asynchronous; the
+    // bounded refresh loop reads the actual SID again before declaring success.
+    if (space_bridge_move_window(wid, sid)) {
+      return;
+    }
+  }
+  window_send_to_space(cid, wid, sid);
 }
 
 static inline uint32_t window_create(int cid, CGRect frame, bool hidpi, bool unmanaged) {

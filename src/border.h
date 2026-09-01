@@ -3,6 +3,8 @@
 #include "misc/helpers.h"
 #include "misc/window.h"
 #include "misc/drawing.h"
+#include "geometry.h"
+#include "space_recovery.h"
 #include "animation.h"
 #include "hashtable.h"
 
@@ -13,13 +15,6 @@
 #define BORDER_STYLE_SQUARE 's'
 #define BORDER_STYLE_NONE 'n'
 #define BORDER_PADDING 8.0
-#define BORDER_TSMN 3.27f
-
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
-#define BORDER_TSMW 52.f
-#else
-#define BORDER_TSMW 8.f
-#endif
 
 struct color_style {
   enum { COLOR_STYLE_GRADIENT, COLOR_STYLE_SOLID } stype;
@@ -42,6 +37,7 @@ struct settings {
   float border_width;
   float blur_radius;
   char border_style;
+  enum border_position border_position;
   bool hidpi;
   bool show_background;
   int border_order;
@@ -82,6 +78,10 @@ struct border {
   CGRect frame;
   CGRect target_bounds;
   CGRect drawing_bounds;
+  CGRect path_bounds;
+  CGRect clip_bounds;
+  unsigned int inset_edges;
+  int effective_order;
   CGContextRef context;
 
   struct animation animation;
@@ -98,6 +98,7 @@ struct border* border_create();
 void border_destroy(struct border* border);
 
 void border_move(struct border* border);
+void border_retry_space_migration(struct border* border);
 void border_update(struct border* border, bool try_async);
 void border_hide(struct border* border);
 void border_unhide(struct border* border);

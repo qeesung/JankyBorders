@@ -19,3 +19,4 @@
 #define EVENT_FRONT_CHANGE   1508
 
 void events_register(int cid);
+void events_schedule_space_refresh(void);

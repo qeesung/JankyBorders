@@ -99,7 +99,7 @@ static void* yabai_proxy_begin_proc(void* context) {
   if (transaction) {
     SLSTransactionOrderWindow(transaction,
                               proxy->wid,
-                              info->settings.border_order,
+                              proxy->effective_order,
                               info->external_proxy_wid    );
 
     SLSTransactionSetWindowAlpha(transaction, info->border_wid, 0.f);
@@ -142,6 +142,9 @@ static inline void yabai_proxy_begin(struct table* windows, uint32_t wid, uint32
       border->proxy->focused = border->focused;
       border->proxy->target_wid = border->target_wid;
       border->proxy->sid = border->sid;
+      window_send_to_space(border->proxy->cid,
+                           border->proxy->wid,
+                           border->proxy->sid);
       border->proxy->radius = border->radius;
       border->proxy->inner_radius = border->inner_radius;
     }

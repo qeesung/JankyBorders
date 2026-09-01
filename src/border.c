@@ -30,47 +30,144 @@ static bool border_check_too_small(struct border* border, CGRect window_frame) {
   return false;
 }
 
+static CGRect border_display_frame(CGRect window_frame) {
+  enum { BORDER_MAX_ACTIVE_DISPLAYS = 32 };
+  CGDirectDisplayID display_ids[BORDER_MAX_ACTIVE_DISPLAYS];
+  uint32_t display_count = 0;
+  if (CGGetActiveDisplayList(BORDER_MAX_ACTIVE_DISPLAYS,
+                             display_ids,
+                             &display_count) != kCGErrorSuccess
+      || display_count == 0) {
+    return CGRectNull;
+  }
+
+  CGRect display_frames[BORDER_MAX_ACTIVE_DISPLAYS];
+  for (uint32_t i = 0; i < display_count; ++i) {
+    display_frames[i] = CGDisplayBounds(display_ids[i]);
+  }
+
+  return border_geometry_select_display(window_frame,
+                                        display_frames,
+                                        display_count);
+}
+
 static bool border_calculate_bounds(struct border* border, CGRect* frame, struct settings* settings) {
   CGRect window_frame;
   if (border->is_proxy) window_frame = border->target_bounds;
   else SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
 
   border->target_bounds = window_frame;
-  border->too_small = border_check_too_small(border, window_frame);
+  CGRect display_frame = settings->border_position == BORDER_POSITION_AUTO
+                         ? border_display_frame(window_frame)
+                         : CGRectNull;
+  struct border_geometry geometry = border_geometry_calculate(
+      window_frame,
+      display_frame,
+      settings->border_width,
+      BORDER_PADDING,
+      settings->border_position);
+
+  border->too_small = border_check_too_small(border, window_frame)
+                      || CGRectIsEmpty(geometry.path_bounds)
+                      || CGRectIsEmpty(geometry.clip_bounds);
   if (border->too_small) {
     border_hide(border);
     return false;
   }
 
-  float border_offset = - settings->border_width - BORDER_PADDING;
-  *frame = CGRectInset(window_frame, border_offset, border_offset);
+  int effective_order = geometry.force_above
+                        ? BORDER_ORDER_ABOVE
+                        : settings->border_order;
+  if (!CGRectEqualToRect(border->drawing_bounds, geometry.drawing_bounds)
+      || !CGRectEqualToRect(border->path_bounds, geometry.path_bounds)
+      || !CGRectEqualToRect(border->clip_bounds, geometry.clip_bounds)
+      || border->effective_order != effective_order) {
+    border->needs_redraw = true;
+  }
 
-  border->origin = frame->origin;
-  frame->origin = CGPointZero;
-
-
-  window_frame.origin = (CGPoint){ -border_offset, -border_offset };
-  border->drawing_bounds = window_frame;
+  CGFloat margin = settings->border_width + BORDER_PADDING;
+  border->origin = (CGPoint) {
+    window_frame.origin.x - margin,
+    window_frame.origin.y - margin,
+  };
+  border->drawing_bounds = geometry.drawing_bounds;
+  border->path_bounds = geometry.path_bounds;
+  border->clip_bounds = geometry.clip_bounds;
+  border->inset_edges = geometry.inset_edges;
+  border->effective_order = effective_order;
+  *frame = geometry.frame;
 
   return true;
 }
 
-static bool border_add_gradient_glow_path(CGContextRef context,
-                                          CGRect path_rect,
-                                          float inset,
-                                          float corner_radius,
-                                          bool square) {
-  if (square) return drawing_add_rect_with_inset(context, path_rect, inset);
-  return drawing_add_rounded_rect(context, path_rect, corner_radius);
+static bool border_corner_radii_are_uniform(struct border_corner_radii radii) {
+  return radii.top_left == radii.top_right
+         && radii.top_left == radii.bottom_right
+         && radii.top_left == radii.bottom_left;
+}
+
+static bool border_add_rounded_rect(CGMutablePathRef path,
+                                    CGRect rect,
+                                    struct border_corner_radii radii) {
+  if (!path) return false;
+  if (border_corner_radii_are_uniform(radii)) {
+    CGPathAddRoundedRect(path,
+                         NULL,
+                         rect,
+                         radii.top_left,
+                         radii.top_left);
+    return true;
+  }
+
+  CGFloat min_x = CGRectGetMinX(rect);
+  CGFloat max_x = CGRectGetMaxX(rect);
+  CGFloat min_y = CGRectGetMinY(rect);
+  CGFloat max_y = CGRectGetMaxY(rect);
+
+  CGPathMoveToPoint(path, NULL, min_x + radii.top_left, min_y);
+  CGPathAddLineToPoint(path, NULL, max_x - radii.top_right, min_y);
+  CGPathAddArcToPoint(path,
+                      NULL,
+                      max_x,
+                      min_y,
+                      max_x,
+                      min_y + radii.top_right,
+                      radii.top_right);
+  CGPathAddLineToPoint(path, NULL, max_x, max_y - radii.bottom_right);
+  CGPathAddArcToPoint(path,
+                      NULL,
+                      max_x,
+                      max_y,
+                      max_x - radii.bottom_right,
+                      max_y,
+                      radii.bottom_right);
+  CGPathAddLineToPoint(path, NULL, min_x + radii.bottom_left, max_y);
+  CGPathAddArcToPoint(path,
+                      NULL,
+                      min_x,
+                      max_y,
+                      min_x,
+                      max_y - radii.bottom_left,
+                      radii.bottom_left);
+  CGPathAddLineToPoint(path, NULL, min_x, min_y + radii.top_left);
+  CGPathAddArcToPoint(path,
+                      NULL,
+                      min_x,
+                      min_y,
+                      min_x + radii.top_left,
+                      min_y,
+                      radii.top_left);
+  CGPathCloseSubpath(path);
+  return true;
 }
 
 static bool border_draw_gradient_glow(CGContextRef context,
                                       const struct gradient* gradient,
-                                      CGRect path_rect,
-                                      float inset,
-                                      float corner_radius,
+                                      CGPathRef path,
                                       float blur_radius,
-                                      bool square) {
+                                      bool fill) {
+  if (!context || !gradient || !path) return false;
+
   float a, r, g, b;
   colors_mix(gradient->color1, gradient->color2, &a, &r, &g, &b);
   CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, a);
@@ -82,30 +179,33 @@ static bool border_draw_gradient_glow(CGContextRef context,
   }
   CGContextSetRGBFillColor(context, 1.0f, 1.0f, 1.0f, 1.0f);
   CGContextSetRGBStrokeColor(context, 1.0f, 1.0f, 1.0f, 1.0f);
-  if (!border_add_gradient_glow_path(context,
-                                     path_rect,
-                                     inset,
-                                     corner_radius,
-                                     square       )) {
-    CGContextRestoreGState(context);
-    return false;
-  }
-  if (square) CGContextFillPath(context);
+  CGContextAddPath(context, path);
+  if (fill) CGContextFillPath(context);
   else CGContextStrokePath(context);
 
   CGContextSetShadowWithColor(context, CGSizeZero, 0, NULL);
   CGContextSetBlendMode(context, kCGBlendModeDestinationOut);
-  if (!border_add_gradient_glow_path(context,
-                                     path_rect,
-                                     inset,
-                                     corner_radius,
-                                     square       )) {
-    CGContextRestoreGState(context);
-    return false;
-  }
-  if (square) CGContextFillPath(context);
+  CGContextAddPath(context, path);
+  if (fill) CGContextFillPath(context);
   else CGContextStrokePath(context);
   CGContextRestoreGState(context);
+  return true;
+}
+
+static bool border_draw_gradient_path(CGContextRef context,
+                                      CGGradientRef gradient,
+                                      CGPoint direction[2],
+                                      CGPathRef path,
+                                      bool fill) {
+  if (!context || !gradient || !direction || !path) return false;
+  CGContextAddPath(context, path);
+  if (!fill) CGContextReplacePathWithStrokedPath(context);
+  CGContextClip(context);
+  CGContextDrawLinearGradient(context,
+                              gradient,
+                              direction[0],
+                              direction[1],
+                              0);
   return true;
 }
 
@@ -123,7 +223,8 @@ static bool border_draw(struct border* border,
 
   CGGradientRef gradient = NULL;
   CGMutablePathRef inner_clip_path = NULL;
-  CGPoint gradient_dir[2];
+  CGPathRef border_path = NULL;
+  CGPoint gradient_dir[2] = { 0 };
   if (color_style.stype == COLOR_STYLE_GRADIENT) {
     CGAffineTransform trans = CGAffineTransformMakeScale(frame.size.width,
                                                          frame.size.height);
@@ -146,28 +247,31 @@ static bool border_draw(struct border* border,
   CGContextSetLineWidth(border->context, settings->border_width);
   CGContextClearRect(border->context, frame);
 
-  CGRect path_rect = border->drawing_bounds;
+  CGRect path_rect = border->path_bounds;
   inner_clip_path = CGPathCreateMutable();
-  if (!inner_clip_path) {
-    goto draw_failed;
-  }
-  bool square_thick_above = settings->border_style == BORDER_STYLE_SQUARE
-                            && settings->border_order == BORDER_ORDER_ABOVE
-                            && settings->border_width >= BORDER_TSMW;
-  if (square_thick_above) {
-    // Inset the frame to overlap the rounding of macOS windows to create a
-    // truly square border
-    path_rect = CGRectInset(border->drawing_bounds,
-                            BORDER_TSMN,
-                            BORDER_TSMN            );
-
-    CGPathAddRect(inner_clip_path, NULL, path_rect);
+  if (!inner_clip_path) goto draw_failed;
+  if (settings->border_style == BORDER_STYLE_SQUARE) {
+    CGPathAddRect(inner_clip_path, NULL, border->clip_bounds);
   } else {
-    CGPathAddRoundedRect(inner_clip_path,
-                         NULL,
-                         CGRectInset(path_rect, 1.0, 1.0),
-                         border->inner_radius,
-                         border->inner_radius             );
+    struct border_corner_radii clip_radii;
+    if (settings->border_position == BORDER_POSITION_AUTO
+        && border->inset_edges == 0) {
+      clip_radii = (struct border_corner_radii) {
+        border->inner_radius,
+        border->inner_radius,
+        border->inner_radius,
+        border->inner_radius,
+      };
+    } else {
+      clip_radii = border_geometry_corner_radii(border->drawing_bounds,
+                                                border->clip_bounds,
+                                                border->radius);
+    }
+    if (!border_add_rounded_rect(inner_clip_path,
+                                 border->clip_bounds,
+                                 clip_radii)) {
+      goto draw_failed;
+    }
   }
   if (!drawing_clip_between_rect_and_path(border->context,
                                           frame,
@@ -181,79 +285,75 @@ static bool border_draw(struct border* border,
                         ? 9.0
                         : border->radius;
 
+  if (square) {
+    border_path = drawing_create_rect_path(path_rect, inset);
+  } else {
+    struct border_corner_radii path_radii = border_geometry_corner_radii(
+        border->drawing_bounds,
+        path_rect,
+        corner_radius);
+    CGMutablePathRef rounded_path = CGPathCreateMutable();
+    if (!border_add_rounded_rect(rounded_path, path_rect, path_radii)) {
+      if (rounded_path) CFRelease(rounded_path);
+      goto draw_failed;
+    }
+    border_path = rounded_path;
+  }
+  if (!border_path) goto draw_failed;
+
   if (color_style.stype == COLOR_STYLE_SOLID) {
-    if (square) {
-      if (!drawing_draw_square_with_inset(border->context,
-                                          path_rect,
-                                          inset,
-                                          colors,
-                                          color_style.glow)) {
-        goto draw_failed;
-      }
-    } else {
-      if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM
-          && !drawing_draw_rounded_rect_with_inset(border->context,
-                                                   path_rect,
-                                                   corner_radius,
-                                                   true,
-                                                   colors,
-                                                   color_style.glow)) {
-        goto draw_failed;
-      }
-      if (!drawing_draw_rounded_rect_with_inset(border->context,
-                                                path_rect,
-                                                corner_radius,
-                                                false,
-                                                colors,
-                                                color_style.glow)) {
-        goto draw_failed;
-      }
+    if (!square
+        && settings->border_style == BORDER_STYLE_ROUND_UNIFORM
+        && !drawing_paint_path(border->context,
+                               border_path,
+                               path_rect,
+                               colors,
+                               color_style.glow,
+                               true)) {
+      goto draw_failed;
+    }
+    if (!drawing_paint_path(border->context,
+                            border_path,
+                            path_rect,
+                            colors,
+                            color_style.glow,
+                            square)) {
+      goto draw_failed;
     }
   } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
-    if (color_style.glow) {
-      float blur_radius = square_thick_above ? BORDER_TSMN : 10.0f;
-      if (!border_draw_gradient_glow(border->context,
-                                     &color_style.gradient,
-                                     path_rect,
-                                     inset,
-                                     corner_radius,
-                                     blur_radius,
-                                     square               )) {
-        goto draw_failed;
-      }
+    if (color_style.glow
+        && !border_draw_gradient_glow(border->context,
+                                      &color_style.gradient,
+                                      border_path,
+                                      10.0f,
+                                      square)) {
+      goto draw_failed;
     }
 
-    if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM) {
+    if (!square
+        && settings->border_style == BORDER_STYLE_ROUND_UNIFORM) {
       CGContextSaveGState(border->context);
-      bool filled_gradient = drawing_fill_rounded_gradient(border->context,
-                                                           gradient,
-                                                           gradient_dir,
-                                                           path_rect,
-                                                           corner_radius);
+      bool filled_gradient = border_draw_gradient_path(border->context,
+                                                       gradient,
+                                                       gradient_dir,
+                                                       border_path,
+                                                       true);
       CGContextRestoreGState(border->context);
       if (!filled_gradient) goto draw_failed;
     }
 
     CGContextSaveGState(border->context);
-    bool drew_gradient = false;
-    if (square) {
-      drew_gradient = drawing_draw_square_gradient_with_inset(border->context,
-                                                              gradient,
-                                                              gradient_dir,
-                                                              path_rect,
-                                                              inset       );
-    } else {
-      drew_gradient = drawing_draw_rounded_gradient_with_inset(border->context,
-                                                               gradient,
-                                                               gradient_dir,
-                                                               path_rect,
-                                                               corner_radius  );
-    }
+    bool drew_gradient = border_draw_gradient_path(border->context,
+                                                   gradient,
+                                                   gradient_dir,
+                                                   border_path,
+                                                   square);
     CGContextRestoreGState(border->context);
     if (!drew_gradient) goto draw_failed;
   }
 
-  if (settings->show_background && settings->border_order != 1) {
+  if (settings->show_background
+      && border->effective_order != BORDER_ORDER_ABOVE) {
     CGContextRestoreGState(border->context);
     CGContextSaveGState(border->context);
     color_style = settings->background;
@@ -264,6 +364,7 @@ static bool border_draw(struct border* border,
     }
   }
   CFRelease(inner_clip_path);
+  CFRelease(border_path);
   if (gradient) CGGradientRelease(gradient);
   CGContextFlush(border->context);
   CGContextRestoreGState(border->context);
@@ -274,6 +375,7 @@ static bool border_draw(struct border* border,
 draw_failed:
   border->needs_redraw = true;
   if (inner_clip_path) CFRelease(inner_clip_path);
+  if (border_path) CFRelease(border_path);
   if (gradient) CGGradientRelease(gradient);
   CGContextRestoreGState(border->context);
   SLSWindowThaw(border->cid, border->wid);
@@ -305,7 +407,41 @@ void border_create_window(struct border* border, CGRect frame, bool unmanaged, b
   pthread_mutex_unlock(&border->mutex);
 }
 
+static void border_refresh_space(struct border* border, bool retry_helpers) {
+  if (border->is_proxy) return;
+
+  uint64_t sid = window_direct_space_id(border->cid, border->target_wid);
+  if (!sid) return;
+
+  uint64_t previous_sid = border->sid;
+  bool sid_changed = sid != previous_sid;
+  border->sid = sid;
+  if (border->wid
+      && border_space_should_migrate(previous_sid,
+                                     sid,
+                                     window_direct_space_id(border->cid,
+                                                            border->wid),
+                                     retry_helpers)) {
+    window_recover_to_space(border->cid, border->wid, sid);
+  }
+  if (border->proxy && border->proxy->wid) {
+    uint64_t previous_proxy_sid = border->proxy->sid;
+    border->proxy->sid = sid;
+    if (border_space_should_migrate(
+            previous_proxy_sid,
+            sid,
+            window_direct_space_id(border->proxy->cid, border->proxy->wid),
+            retry_helpers)) {
+      window_recover_to_space(border->proxy->cid, border->proxy->wid, sid);
+    }
+  }
+  if (sid_changed) {
+    debug("Window %u moved to Space %llu\n", border->target_wid, sid);
+  }
+}
+
 void border_update_internal(struct border* border, struct settings* settings) {
+  border_refresh_space(border, false);
   if (border->external_proxy_wid) return;
   if (settings->border_style == BORDER_STYLE_NONE) {
     border_hide(border);
@@ -394,7 +530,7 @@ void border_update_internal(struct border* border, struct settings* settings) {
   SLSTransactionSetWindowSubLevel(transaction, border->wid, sub_level);
   SLSTransactionOrderWindow(transaction,
                             border->wid,
-                            settings->border_order,
+                            border->effective_order,
                             border->target_wid      );
   CGError transaction_error = SLSTransactionCommit(transaction, 0);
   CFRelease(transaction);
@@ -430,12 +566,7 @@ void border_init(struct border* border, int cid) {
 struct border* border_create() {
   struct border* border = malloc(sizeof(struct border));
   if (!border) return NULL;
-  int cid = 0;
-  if (SLSNewConnection(0, &cid) != kCGErrorSuccess || !cid) {
-    free(border);
-    return NULL;
-  }
-  border_init(border, cid);
+  border_init(border, SLSMainConnectionID());
   return border;
 }
 
@@ -454,31 +585,12 @@ void border_destroy(struct border* border) {
 }
 
 void border_move(struct border* border) {
-  pthread_mutex_lock(&border->mutex);
-  if (border->external_proxy_wid) {
-    pthread_mutex_unlock(&border->mutex);
-    return;
-  }
-  struct settings* settings = border_get_settings(border);
-  CGRect window_frame;
-  SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
-  CGPoint origin = { .x = window_frame.origin.x
-                          - settings->border_width
-                          - BORDER_PADDING,
-                     .y = window_frame.origin.y
-                          - settings->border_width
-                          - BORDER_PADDING          };
+  border_update(border, true);
+}
 
-  CFTypeRef transaction = border->wid
-                          ? SLSTransactionCreate(border->cid)
-                          : NULL;
-  if (transaction) {
-    SLSTransactionMoveWindowWithGroup(transaction, border->wid, origin);
-    SLSTransactionCommit(transaction, 0);
-    CFRelease(transaction);
-  }
-  border->target_bounds = window_frame;
-  border->origin = origin;
+void border_retry_space_migration(struct border* border) {
+  pthread_mutex_lock(&border->mutex);
+  border_refresh_space(border, true);
   pthread_mutex_unlock(&border->mutex);
 }
 
@@ -508,6 +620,7 @@ void border_hide(struct border* border) {
 
 void border_unhide(struct border* border) {
   pthread_mutex_lock(&border->mutex);
+  border_refresh_space(border, false);
   struct settings* settings = border_get_settings(border);
   if (settings->border_style == BORDER_STYLE_NONE
       || border->too_small
@@ -522,7 +635,7 @@ void border_unhide(struct border* border) {
     if (transaction) {
       SLSTransactionOrderWindow(transaction,
                                 border->wid,
-                                settings->border_order,
+                                border->effective_order,
                                 border->target_wid      );
       SLSTransactionCommit(transaction, 0);
       CFRelease(transaction);

@@ -30,6 +30,15 @@ Specifies the style of the border (either \fIround\fR, \fIsquare\fR, \fIuniform\
 \fInone\fR)
 .PP
 .RE
+\fBposition=<position>\fR
+.RS 4
+Controls where the border is drawn relative to the window edge. \fIinside\fR
+draws entirely over the window, \fIcenter\fR straddles the edge, and \fIoutside\fR
+draws entirely beyond it. The default \fIauto\fR preserves the traditional
+appearance, but moves individual edges inside when they would be clipped by
+the display boundary.
+.PP
+.RE
 \fBactive_color=<color>\fR
 .RS 4
 Sets the border color for the focused window (format: \fI0xAARRGGBB\fR).\& For
@@ -111,6 +120,11 @@ Either \fIon\fR or \fIoff\fR.\&
 Either \fIround\fR, \fIsquare\fR, \fIuniform\fR, or \fInone\fR.\& The \fInone\fR style disables
 borders without stopping the running process, so a later style update can
 enable them again.\&
+.PP
+.RE
+\fB<position>\fR
+.RS 4
+Either \fIauto\fR, \fIinside\fR, \fIcenter\fR, or \fIoutside\fR.
 .PP
 .RE
 \fB<color>\fR
