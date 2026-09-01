@@ -21,17 +21,39 @@ brew install borders
 
 #### Install this fork as a user service
 
-To install the current checkout instead of the upstream Homebrew build, use:
+The local service is packaged as a versioned `JankyBorders.app`. Before the
+first installation, create and configure one stable local code-signing
+identity. This lets macOS associate screen-recording permission with the same
+application identity across updates and rollbacks.
+
+Start with the guided setup instructions:
+
+```bash
+make signing-help
+```
+
+Create the requested `JankyBorders Local Code Signing` certificate manually in
+Keychain Access, then configure its exact 40-digit SHA-1 fingerprint and verify
+it:
+
+```bash
+make configure-signing JANKYBORDERS_SIGNING_IDENTITY=YOUR_40_HEX_SHA1
+make signing-status
+```
+
+The installer never creates, trusts, exports, or silently replaces this
+identity. To install the current checkout instead of the upstream Homebrew
+build, use:
 
 ```bash
 brew services stop borders # safe when the Homebrew service is already stopped
 make install-service
 ```
 
-This builds the current source, installs a signed and versioned copy below
+This builds the current source, installs the signed and versioned app below
 `$HOME/.local/opt/jankyborders`, updates `$HOME/.local/bin/borders`, and starts
-the user LaunchAgent `io.github.qeesung.jankyborders.local`. It does not modify the
-Homebrew Cellar, so the Homebrew build remains available as a rollback.
+the user LaunchAgent `io.github.qeesung.jankyborders.local`. It does not modify
+the Homebrew Cellar, so the Homebrew build remains available as a rollback.
 
 The service starts `borders` without arguments so that the normal
 `bordersrc` lookup described below still applies. Its `PATH` puts

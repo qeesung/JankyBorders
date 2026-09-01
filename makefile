@@ -1,24 +1,25 @@
-FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c src/space_bridge.m
+FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c src/screen_capture.c src/space_bridge.m
 HEADERS = $(wildcard src/*.h src/misc/*.h)
 LIBS = -framework AppKit -framework CoreVideo -F/System/Library/PrivateFrameworks/ -framework SkyLight
 SAFETY_TEST_FILES = tests/safety_tests.c src/parse.c src/mach.c src/hashtable.c
 SANITIZER_FLAGS = -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 THREAD_SANITIZER_FLAGS = -fsanitize=thread -fno-omit-frame-pointer
+DEPLOYMENT_FLAGS = -mmacosx-version-min=14.0
 
 all: bin/borders
 
 bin/borders: $(FILES) $(HEADERS) makefile | bin
-	clang -std=c99 -O3 -g $(FILES) -o bin/borders $(LIBS)
+	clang -std=c99 $(DEPLOYMENT_FLAGS) -O3 -g $(FILES) -o bin/borders $(LIBS)
 
 debug: | bin
-	clang -std=c99 -O0 -g -DDEBUG $(FILES) -o bin/debug $(LIBS)
+	clang -std=c99 $(DEPLOYMENT_FLAGS) -O0 -g -DDEBUG $(FILES) -o bin/debug $(LIBS)
 
 warnings: | bin
-	clang -std=c99 -Wall -Wextra -Werror -O0 -g $(FILES) -o bin/warnings-check $(LIBS)
+	clang -std=c99 $(DEPLOYMENT_FLAGS) -Wall -Wextra -Werror -O0 -g $(FILES) -o bin/warnings-check $(LIBS)
 	/bin/bash -n scripts/local-service
 
 asan: | bin
-	clang -std=c99 -Wall -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g $(FILES) -o bin/debug $(LIBS)
+	clang -std=c99 $(DEPLOYMENT_FLAGS) -Wall -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g $(FILES) -o bin/debug $(LIBS)
 	./bin/debug
 
 test: | bin
@@ -83,6 +84,21 @@ rollback-service:
 service-status:
 	@/bin/bash scripts/local-service status
 
+signing-help:
+	@/bin/bash scripts/local-service signing-help
+
+configure-signing:
+	@JANKYBORDERS_SIGNING_IDENTITY="$(JANKYBORDERS_SIGNING_IDENTITY)" /bin/bash scripts/local-service configure-signing
+
+signing-status:
+	@/bin/bash scripts/local-service signing-status
+
+screen-capture-status:
+	@/bin/bash scripts/local-service screen-capture-status
+
+request-screen-capture:
+	@/bin/bash scripts/local-service request-screen-capture
+
 uninstall-service:
 	@/bin/bash scripts/local-service uninstall
 
@@ -92,4 +108,4 @@ bin:
 clean:
 	rm -rf bin
 
-.PHONY: all debug warnings asan test test-sanitize test-thread clean install-service update-service service-start service-stop service-restart rollback-service service-status uninstall-service
+.PHONY: all debug warnings asan test test-sanitize test-thread clean install-service update-service service-start service-stop service-restart rollback-service service-status signing-help configure-signing signing-status screen-capture-status request-screen-capture uninstall-service

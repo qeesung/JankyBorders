@@ -15,6 +15,10 @@ JankyBorders - A window border system for macOS
 .PP
 \fBborders [options]\fR
 .PP
+\fBborders --screen-capture-status\fR
+.PP
+\fBborders --request-screen-capture\fR
+.PP
 .SH DESCRIPTION
 .PP
 \fBJankyBorders\fR is a lightweight tool designed to add colored borders to
@@ -99,6 +103,24 @@ Once this list is populated, only applications listed here are considered
 for receiving a border.\& If the whitelist is empty (default) it is inactive.\&
 .PP
 .RE
+\fB--screen-capture-status\fR
+.RS 4
+Prints whether screen-recording permission is granted.\& This utility exits
+without starting a border instance or requesting Accessibility permission.\&
+.PP
+.RE
+\fB--request-screen-capture\fR
+.RS 4
+Explicitly asks macOS for the screen-recording permission needed by features
+that sample window contents.\& This utility exits without starting a border
+instance or requesting Accessibility permission.\& After granting access in
+System Settings, restart a running local service with
+\fImake service-restart\fR.\& The LaunchAgent never invokes this option at login.\&
+When using the Make target, install the signed app first; the target launches
+the app through LaunchServices so permission is attached to the service
+identity.\&
+.PP
+.RE
 If an instance of \fBborders\fR is already running, subsequent invocations will
 update the existing process with the new arguments.\&
 .PP
@@ -168,6 +190,40 @@ A comma separated list of application names.\& This argument should be
 quoted.\&
 .PP
 .RE
+.SH LOCAL SERVICE
+.PP
+When building this fork from its source checkout, create and configure one
+stable local code-signing identity before the first service installation:
+.PP
+	\fImake signing-help\fR
+.br
+\fImake configure-signing JANKYBORDERS_SIGNING_IDENTITY=YOUR_40_HEX_SHA1\fR
+.br
+	\fImake signing-status\fR
+.PP
+The installer packages a versioned \fIJankyBorders.app\fR and never creates,
+trusts, exports, or silently replaces the configured identity.\& The stable
+application identity is intended to preserve macOS screen-recording permission
+across compatible updates and rollbacks.\&
+.PP
+Manage the per-user LaunchAgent with:
+.PP
+	\fImake install-service\fR
+.br
+	\fImake update-service\fR
+.br
+	\fImake rollback-service\fR
+.br
+	\fImake service-status\fR
+.br
+	\fImake service-start\fR
+.br
+	\fImake service-stop\fR
+.br
+	\fImake service-restart\fR
+.br
+	\fImake uninstall-service\fR
+.PP
 .SH BUGS
 .PP
 Report them at https://github.\&com/FelixKratz/JankyBorders/issues.\&

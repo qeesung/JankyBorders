@@ -8,6 +8,7 @@
 #include "misc/connection.h"
 #include "misc/ax.h"
 #include "misc/yabai.h"
+#include "screen_capture.h"
 #include <stdio.h>
 #include <dlfcn.h>
 
@@ -16,6 +17,9 @@
 
 #define HELP_OPT_LONG "--help"
 #define HELP_OPT_SHRT "-h"
+
+#define SCREEN_CAPTURE_STATUS_OPT "--screen-capture-status"
+#define SCREEN_CAPTURE_REQUEST_OPT "--request-screen-capture"
 
 #define MAJOR 1
 #define MINOR 9
@@ -145,6 +149,38 @@ static void message_handler(void* data, uint32_t len) {
   }
 }
 
+static int screen_capture_command(const char* option) {
+  enum screen_capture_permission_status status =
+      screen_capture_permission_status();
+  if (strcmp(option, SCREEN_CAPTURE_STATUS_OPT) == 0) {
+    const char* value = status == SCREEN_CAPTURE_PERMISSION_GRANTED
+                        ? "granted"
+                        : status == SCREEN_CAPTURE_PERMISSION_DENIED
+                          ? "denied"
+                          : "unsupported";
+    fprintf(stdout, "Screen capture permission: %s\n", value);
+    return EXIT_SUCCESS;
+  }
+
+  if (status == SCREEN_CAPTURE_PERMISSION_UNSUPPORTED) {
+    fprintf(stderr, "[!] Borders: Screen capture is unsupported on this macOS version\n");
+    return EXIT_FAILURE;
+  }
+  if (status != SCREEN_CAPTURE_PERMISSION_GRANTED) {
+    (void)screen_capture_permission_request();
+    status = screen_capture_permission_status();
+  }
+  if (status == SCREEN_CAPTURE_PERMISSION_GRANTED) {
+    fprintf(stdout, "Screen capture permission: granted\n");
+  } else {
+    fprintf(stdout,
+            "Screen capture permission is not granted yet. Enable JankyBorders "
+            "in System Settings > Privacy & Security > Screen & System Audio "
+            "Recording, then run 'make service-restart'.\n");
+  }
+  return EXIT_SUCCESS;
+}
+
 static bool send_args_to_server(mach_port_t port, int argc, char** argv) {
   void* message = NULL;
   uint32_t message_length = 0;
@@ -194,6 +230,15 @@ int main(int argc, char** argv) {
                    || (strcmp(argv[1], HELP_OPT_SHRT) == 0))) {
     fprintf(stdout, "Refer to the man page for help: man borders\n");
     exit(EXIT_SUCCESS);
+  }
+
+  // Permission utilities must remain usable without starting an instance or
+  // prompting for Accessibility access. The LaunchAgent never passes either
+  // option, so login cannot trigger the screen-capture prompt.
+  if (argc == 2
+      && (strcmp(argv[1], SCREEN_CAPTURE_STATUS_OPT) == 0
+          || strcmp(argv[1], SCREEN_CAPTURE_REQUEST_OPT) == 0)) {
+    return screen_capture_command(argv[1]);
   }
 
   if (!parse_settings_scope_is_valid(argc - 1, argv + 1)) {

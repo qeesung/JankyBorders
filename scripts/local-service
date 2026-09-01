@@ -3,7 +3,10 @@
 set -euo pipefail
 
 JB_SERVICE_LABEL="io.github.qeesung.jankyborders.local"
-JB_ARTIFACT_SCHEMA="service-v1"
+JB_ARTIFACT_SCHEMA="app-v2"
+JB_LEGACY_ARTIFACT_SCHEMA="service-v1"
+JB_APP_NAME="JankyBorders.app"
+JB_SIGNING_IDENTITY_NAME="JankyBorders Local Code Signing"
 JB_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 JB_SOURCE_ROOT="$(cd "$JB_SCRIPT_DIR/.." && pwd -P)"
 JB_USER_HOME="$(cd "${HOME:?HOME must be set}" && pwd -P)"
@@ -15,32 +18,39 @@ JB_LAUNCH_AGENTS_DIR="$JB_USER_HOME/Library/LaunchAgents"
 JB_LOG_DIR="$JB_USER_HOME/Library/Logs/JankyBorders"
 JB_SOURCE_BINARY="$JB_SOURCE_ROOT/bin/borders"
 JB_SOURCE_MANPAGE="$JB_SOURCE_ROOT/docs/borders.1"
+JB_INFO_PLIST_TEMPLATE="$JB_SOURCE_ROOT/resources/Info.plist.template"
 JB_CURRENT_VERSION_LINK="$JB_INSTALL_ROOT/current"
 JB_PREVIOUS_VERSION_LINK="$JB_INSTALL_ROOT/previous"
+JB_SIGNING_IDENTITY_FILE="$JB_INSTALL_ROOT/signing-identity.sha1"
 JB_STABLE_BINARY="$JB_BIN_DIR/borders"
 JB_STABLE_MANPAGE="$JB_MAN_DIR/borders.1"
 JB_PLIST="$JB_LAUNCH_AGENTS_DIR/$JB_SERVICE_LABEL.plist"
 JB_DOMAIN="gui/$(/usr/bin/id -u)"
 JB_SERVICE_TARGET="$JB_DOMAIN/$JB_SERVICE_LABEL"
-JB_TEMP_BINARY_DIR=""
+JB_TEMP_VERSION_DIR=""
 JB_TEMP_PLIST=""
 JB_TEMP_PLIST_BACKUP=""
 JB_TEMP_LINK_DIR=""
+JB_TEMP_SIGNING_IDENTITY_FILE=""
 
 jb_cleanup() {
-  if [[ -n "$JB_TEMP_BINARY_DIR" && -d "$JB_TEMP_BINARY_DIR" ]]; then
-    /bin/rm -f "$JB_TEMP_BINARY_DIR/borders"
-    /bin/rmdir "$JB_TEMP_BINARY_DIR" 2>/dev/null || true
+  if [[ -n "$JB_TEMP_VERSION_DIR" && -d "$JB_TEMP_VERSION_DIR" ]]; then
+    if [[ "$JB_TEMP_VERSION_DIR" == "$JB_INSTALL_ROOT/.install."* ]]; then
+      /bin/rm -R "$JB_TEMP_VERSION_DIR" 2>/dev/null || true
+    fi
   fi
   if [[ -n "$JB_TEMP_PLIST" ]]; then
-    /bin/rm -f "$JB_TEMP_PLIST"
+    /bin/rm -f "$JB_TEMP_PLIST" 2>/dev/null || true
   fi
-  if [[ -n "$JB_TEMP_PLIST_BACKUP" ]]; then
-    /bin/rm -f "$JB_TEMP_PLIST_BACKUP"
+  if [[ -n "$JB_TEMP_PLIST_BACKUP" && -f "$JB_TEMP_PLIST_BACKUP" ]]; then
+    printf 'local-service: preserved unrecovered LaunchAgent backup: %s\n' "$JB_TEMP_PLIST_BACKUP" >&2
   fi
   if [[ -n "$JB_TEMP_LINK_DIR" && -d "$JB_TEMP_LINK_DIR" ]]; then
-    /bin/rm -f "$JB_TEMP_LINK_DIR/link"
+    /bin/rm -f "$JB_TEMP_LINK_DIR/link" 2>/dev/null || true
     /bin/rmdir "$JB_TEMP_LINK_DIR" 2>/dev/null || true
+  fi
+  if [[ -n "$JB_TEMP_SIGNING_IDENTITY_FILE" ]]; then
+    /bin/rm -f "$JB_TEMP_SIGNING_IDENTITY_FILE" 2>/dev/null || true
   fi
 }
 
@@ -71,6 +81,11 @@ Commands:
   restart    Restart the installed user LaunchAgent
   status     Show the installed version and LaunchAgent status
   uninstall  Stop the service and remove managed entry points
+  signing-help       Show how to create and configure the local signing identity
+  signing-status     Validate the configured signing identity
+  configure-signing  Save JANKYBORDERS_SIGNING_IDENTITY (a 40-digit SHA-1 fingerprint)
+  screen-capture-status   Check permission as the installed signed app
+  request-screen-capture  Explicitly request permission as the installed signed app
 EOF
 }
 
@@ -129,6 +144,90 @@ jb_acquire_lock() {
   fi
 }
 
+jb_normalize_signing_identity() {
+  local jb_identity="$1"
+
+  [[ "$jb_identity" =~ ^[[:xdigit:]]{40}$ ]] || return 1
+  printf '%s' "$jb_identity" | /usr/bin/tr '[:lower:]' '[:upper:]'
+}
+
+jb_signing_identity_available() {
+  local jb_identity="$1"
+
+  /usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+    | /usr/bin/awk \
+        -v fingerprint="$jb_identity" \
+        -v expected_name="\"$JB_SIGNING_IDENTITY_NAME\"" \
+        'toupper($2) == fingerprint && index($0, expected_name) > 0 { found = 1 } END { exit !found }'
+}
+
+jb_read_signing_identity() {
+  local jb_raw_identity
+
+  [[ -e "$JB_SIGNING_IDENTITY_FILE" ]] \
+    || jb_die "signing identity is not configured; run 'make signing-help' first"
+  [[ ! -L "$JB_SIGNING_IDENTITY_FILE" ]] \
+    || jb_die "signing identity configuration must not be a symlink: $JB_SIGNING_IDENTITY_FILE"
+  [[ -f "$JB_SIGNING_IDENTITY_FILE" ]] \
+    || jb_die "signing identity configuration is not a regular file: $JB_SIGNING_IDENTITY_FILE"
+
+  jb_raw_identity="$(<"$JB_SIGNING_IDENTITY_FILE")"
+  if ! JB_SIGNING_IDENTITY="$(jb_normalize_signing_identity "$jb_raw_identity")"; then
+    jb_die "signing identity configuration must contain exactly one 40-digit SHA-1 fingerprint"
+  fi
+}
+
+jb_require_configured_signing_identity() {
+  jb_read_signing_identity
+  jb_signing_identity_available "$JB_SIGNING_IDENTITY" \
+    || jb_die "configured identity $JB_SIGNING_IDENTITY is not a valid '$JB_SIGNING_IDENTITY_NAME' code-signing identity with a private key"
+}
+
+jb_signing_help() {
+  /bin/cat <<EOF
+JankyBorders local service updates require one stable signing identity.
+
+Create it manually in Keychain Access:
+  1. Open Certificate Assistant > Create a Certificate.
+  2. Set Name to: $JB_SIGNING_IDENTITY_NAME
+  3. Set Identity Type to: Self Signed Root
+  4. Set Certificate Type to: Code Signing
+  5. Enable "Let me override defaults" and set Validity Period to 3650 days.
+  6. Finish creation and keep the private key in your login keychain.
+
+Find its 40-digit SHA-1 fingerprint:
+  security find-identity -v -p codesigning
+
+Configure that exact fingerprint:
+  make configure-signing JANKYBORDERS_SIGNING_IDENTITY=YOUR_40_HEX_SHA1
+
+The installer never creates, trusts, exports, or falls back from this identity.
+EOF
+}
+
+jb_signing_status() {
+  local jb_identity
+
+  if [[ ! -e "$JB_SIGNING_IDENTITY_FILE" ]]; then
+    printf 'signing identity: not configured\n'
+    printf 'configuration: %s\n' "$JB_SIGNING_IDENTITY_FILE"
+    return 1
+  fi
+
+  jb_read_signing_identity
+  jb_identity="$JB_SIGNING_IDENTITY"
+  printf 'signing identity: %s\n' "$jb_identity"
+  printf 'expected name: %s\n' "$JB_SIGNING_IDENTITY_NAME"
+  printf 'configuration: %s\n' "$JB_SIGNING_IDENTITY_FILE"
+  if jb_signing_identity_available "$jb_identity"; then
+    printf 'status: valid code-signing identity with private key\n'
+    return 0
+  fi
+
+  printf 'status: unavailable, invalid, wrong name, or missing private key\n'
+  return 1
+}
+
 jb_service_loaded() {
   /bin/launchctl print "$JB_SERVICE_TARGET" >/dev/null 2>&1
 }
@@ -152,11 +251,12 @@ jb_require_no_homebrew_service() {
 
 jb_validate_managed_link() {
   local jb_path="$1"
+  local jb_expected_target="$2"
   local jb_target
 
   if [[ -L "$jb_path" ]]; then
     jb_target="$(/usr/bin/readlink "$jb_path")"
-    if [[ "$jb_target" != "$JB_INSTALL_ROOT/"* ]]; then
+    if [[ "$jb_target" != "$jb_expected_target" ]]; then
       jb_die "refusing to replace unmanaged symlink: $jb_path -> $jb_target"
     fi
     if [[ -d "$jb_path" ]]; then
@@ -167,6 +267,20 @@ jb_validate_managed_link() {
   fi
 }
 
+jb_version_root_is_managed() {
+  local jb_version_root="$1"
+  local jb_parent
+  local jb_name
+
+  [[ "$jb_version_root" == /* ]] || return 1
+  jb_parent="$(/usr/bin/dirname "$jb_version_root")" || return 1
+  jb_name="$(/usr/bin/basename "$jb_version_root")" || return 1
+  [[ "$jb_parent" == "$JB_INSTALL_ROOT"
+    && -n "$jb_name"
+    && "$jb_name" != "."
+    && "$jb_name" != ".." ]]
+}
+
 jb_validate_version_link() {
   local jb_path="$1"
   local jb_target
@@ -174,26 +288,165 @@ jb_validate_version_link() {
   [[ -e "$jb_path" || -L "$jb_path" ]] || return 0
   [[ -L "$jb_path" ]] || jb_die "refusing to replace unmanaged version path: $jb_path"
   jb_target="$(/usr/bin/readlink "$jb_path")"
-  [[ "$jb_target" == "$JB_INSTALL_ROOT/"* ]] || jb_die "invalid managed version link: $jb_path -> $jb_target"
-  [[ -d "$jb_target" ]] || jb_die "managed version target is missing: $jb_path -> $jb_target"
+  jb_version_root_is_managed "$jb_target" \
+    || jb_die "invalid managed version link: $jb_path -> $jb_target"
+  [[ -d "$jb_target" && ! -L "$jb_target" ]] \
+    || jb_die "managed version target is missing or symlinked: $jb_path -> $jb_target"
+}
+
+jb_artifact_schema() {
+  local jb_version_root="$1"
+  local jb_schema
+
+  if [[ -e "$jb_version_root/ARTIFACT_SCHEMA" || -L "$jb_version_root/ARTIFACT_SCHEMA" ]]; then
+    [[ -f "$jb_version_root/ARTIFACT_SCHEMA" && ! -L "$jb_version_root/ARTIFACT_SCHEMA" ]] \
+      || return 1
+    jb_schema="$(<"$jb_version_root/ARTIFACT_SCHEMA")"
+    case "$jb_schema" in
+      "$JB_ARTIFACT_SCHEMA"|"$JB_LEGACY_ARTIFACT_SCHEMA")
+        printf '%s\n' "$jb_schema"
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+
+  if [[ -x "$jb_version_root/bin/borders" && ! -e "$jb_version_root/$JB_APP_NAME" ]]; then
+    printf '%s\n' "$JB_LEGACY_ARTIFACT_SCHEMA"
+    return 0
+  fi
+  return 1
+}
+
+jb_version_binary() {
+  local jb_version_root="$1"
+  local jb_schema
+
+  jb_schema="$(jb_artifact_schema "$jb_version_root")" || return 1
+  case "$jb_schema" in
+    "$JB_ARTIFACT_SCHEMA")
+      printf '%s/%s/Contents/MacOS/borders\n' "$jb_version_root" "$JB_APP_NAME"
+      ;;
+    "$JB_LEGACY_ARTIFACT_SCHEMA")
+      printf '%s/bin/borders\n' "$jb_version_root"
+      ;;
+  esac
+}
+
+jb_codesign_identifier() {
+  /usr/bin/codesign -dvv "$1" 2>&1 \
+    | /usr/bin/awk -F= '/^Identifier=/ { print substr($0, index($0, "=") + 1); found = 1; exit } END { exit !found }'
+}
+
+jb_codesign_designated_requirement() {
+  /usr/bin/codesign -d -r- "$1" 2>&1 \
+    | /usr/bin/awk '/^designated => / { sub(/^designated => /, ""); print; found = 1; exit } END { exit !found }'
+}
+
+jb_plist_value_is() {
+  local jb_plist="$1"
+  local jb_key="$2"
+  local jb_type="$3"
+  local jb_expected="$4"
+  local jb_actual
+
+  jb_actual="$(/usr/bin/plutil -extract "$jb_key" raw -expect "$jb_type" "$jb_plist" 2>/dev/null)" \
+    || return 1
+  [[ "$jb_actual" == "$jb_expected" ]]
+}
+
+jb_legacy_artifact_valid() {
+  local jb_version_root="$1"
+  local jb_binary="$jb_version_root/bin/borders"
+  local jb_recorded_digest
+  local jb_actual_digest
+
+  [[ -x "$jb_binary" && ! -L "$jb_binary" ]] || return 1
+  [[ -f "$jb_version_root/INSTALLED_BINARY_SHA256" && ! -L "$jb_version_root/INSTALLED_BINARY_SHA256" ]] \
+    || return 1
+  /usr/bin/codesign --verify --strict "$jb_binary" >/dev/null 2>&1 || return 1
+  [[ "$(jb_codesign_identifier "$jb_binary")" == "$JB_SERVICE_LABEL" ]] || return 1
+  jb_recorded_digest="$(<"$jb_version_root/INSTALLED_BINARY_SHA256")"
+  jb_actual_digest="$(/usr/bin/shasum -a 256 "$jb_binary" | /usr/bin/awk '{print $1}')"
+  [[ "$jb_recorded_digest" == "$jb_actual_digest" ]]
+}
+
+jb_app_artifact_valid() {
+  local jb_version_root="$1"
+  local jb_app="$jb_version_root/$JB_APP_NAME"
+  local jb_binary="$jb_app/Contents/MacOS/borders"
+  local jb_command_link="$jb_version_root/bin/borders"
+  local jb_plist="$jb_app/Contents/Info.plist"
+  local jb_identity
+  local jb_recorded_digest
+  local jb_actual_digest
+  local jb_recorded_requirement
+  local jb_actual_requirement
+  local jb_bundle_version
+
+  [[ -d "$jb_app" && ! -L "$jb_app" ]] || return 1
+  [[ -x "$jb_binary" && ! -L "$jb_binary" ]] || return 1
+  [[ -L "$jb_command_link" ]] || return 1
+  [[ "$(/usr/bin/readlink "$jb_command_link")" == "../$JB_APP_NAME/Contents/MacOS/borders" ]] || return 1
+  [[ -f "$jb_plist" && ! -L "$jb_plist" ]] || return 1
+  [[ -f "$jb_version_root/INSTALLED_BINARY_SHA256" && ! -L "$jb_version_root/INSTALLED_BINARY_SHA256" ]] \
+    || return 1
+  [[ -f "$jb_version_root/SIGNING_IDENTITY_SHA1" && ! -L "$jb_version_root/SIGNING_IDENTITY_SHA1" ]] \
+    || return 1
+  [[ -f "$jb_version_root/DESIGNATED_REQUIREMENT" && ! -L "$jb_version_root/DESIGNATED_REQUIREMENT" ]] \
+    || return 1
+
+  jb_plist_value_is "$jb_plist" CFBundleIdentifier string "$JB_SERVICE_LABEL" || return 1
+  jb_plist_value_is "$jb_plist" CFBundleDisplayName string JankyBorders || return 1
+  jb_plist_value_is "$jb_plist" CFBundleInfoDictionaryVersion string 6.0 || return 1
+  jb_plist_value_is "$jb_plist" CFBundleName string JankyBorders || return 1
+  jb_plist_value_is "$jb_plist" CFBundleExecutable string borders || return 1
+  jb_plist_value_is "$jb_plist" CFBundlePackageType string APPL || return 1
+  jb_plist_value_is "$jb_plist" CFBundleShortVersionString string 1.9.0 || return 1
+  jb_bundle_version="$(/usr/bin/plutil -extract CFBundleVersion raw -expect string "$jb_plist" 2>/dev/null)" \
+    || return 1
+  [[ "$jb_bundle_version" =~ ^[1-9][0-9]*$ ]] || return 1
+  jb_plist_value_is "$jb_plist" LSMinimumSystemVersion string 14.0 || return 1
+  jb_plist_value_is "$jb_plist" LSUIElement bool true || return 1
+  jb_plist_value_is "$jb_plist" NSHighResolutionCapable bool true || return 1
+  jb_plist_value_is "$jb_plist" NSScreenCaptureUsageDescription string \
+    "JankyBorders only samples window-edge pixels to choose a high-contrast border color." || return 1
+
+  jb_identity="$(<"$jb_version_root/SIGNING_IDENTITY_SHA1")"
+  jb_identity="$(jb_normalize_signing_identity "$jb_identity")" || return 1
+  /usr/bin/codesign --verify --strict "$jb_app" >/dev/null 2>&1 || return 1
+  [[ "$(jb_codesign_identifier "$jb_app")" == "$JB_SERVICE_LABEL" ]] || return 1
+  /usr/bin/codesign --verify --strict \
+    "-R=certificate leaf = H\"$jb_identity\"" "$jb_app" >/dev/null 2>&1 \
+    || return 1
+
+  jb_recorded_requirement="$(<"$jb_version_root/DESIGNATED_REQUIREMENT")"
+  jb_actual_requirement="$(jb_codesign_designated_requirement "$jb_app")" || return 1
+  [[ -n "$jb_recorded_requirement" && "$jb_recorded_requirement" == "$jb_actual_requirement" ]] || return 1
+
+  jb_recorded_digest="$(<"$jb_version_root/INSTALLED_BINARY_SHA256")"
+  jb_actual_digest="$(/usr/bin/shasum -a 256 "$jb_binary" | /usr/bin/awk '{print $1}')"
+  [[ "$jb_recorded_digest" == "$jb_actual_digest" ]]
 }
 
 jb_version_artifact_valid() {
   local jb_version_root="$1"
-  local jb_binary="$jb_version_root/bin/borders"
-  local jb_identifier
-  local jb_recorded_digest
-  local jb_actual_digest
+  local jb_schema
 
-  [[ -x "$jb_binary" ]] || return 1
-  [[ -f "$jb_version_root/INSTALLED_BINARY_SHA256" ]] || return 1
-  /usr/bin/codesign --verify --strict "$jb_binary" >/dev/null 2>&1 || return 1
-  jb_identifier="$(/usr/bin/codesign -dvv "$jb_binary" 2>&1 | /usr/bin/awk -F= '/^Identifier=/ { print substr($0, index($0, "=") + 1); exit }')" \
+  [[ -d "$jb_version_root" && ! -L "$jb_version_root" ]] \
+    && jb_version_root_is_managed "$jb_version_root" \
     || return 1
-  [[ "$jb_identifier" == "$JB_SERVICE_LABEL" ]] || return 1
-  jb_recorded_digest="$(<"$jb_version_root/INSTALLED_BINARY_SHA256")"
-  jb_actual_digest="$(/usr/bin/shasum -a 256 "$jb_binary" | /usr/bin/awk '{print $1}')"
-  [[ "$jb_recorded_digest" == "$jb_actual_digest" ]]
+  jb_schema="$(jb_artifact_schema "$jb_version_root")" || return 1
+  case "$jb_schema" in
+    "$JB_ARTIFACT_SCHEMA")
+      jb_app_artifact_valid "$jb_version_root"
+      ;;
+    "$JB_LEGACY_ARTIFACT_SCHEMA")
+      jb_legacy_artifact_valid "$jb_version_root"
+      ;;
+  esac
 }
 
 jb_validate_version_artifact() {
@@ -201,6 +454,79 @@ jb_validate_version_artifact() {
 
   jb_version_artifact_valid "$jb_version_root" \
     || jb_die "invalid or incompatible version artifact: $jb_version_root"
+}
+
+jb_assert_managed_v2_identity_compatible() {
+  local jb_requested_identity="$1"
+  local jb_link
+  local jb_version_root
+  local jb_schema
+  local jb_recorded_identity
+
+  for jb_link in "$JB_CURRENT_VERSION_LINK" "$JB_PREVIOUS_VERSION_LINK"; do
+    [[ -L "$jb_link" ]] || continue
+    jb_version_root="$(/usr/bin/readlink "$jb_link")"
+    jb_version_root_is_managed "$jb_version_root" \
+      || jb_die "managed version target is outside the install root: $jb_link -> $jb_version_root"
+    [[ -d "$jb_version_root" && ! -L "$jb_version_root" ]] \
+      || jb_die "managed version target is missing or symlinked: $jb_link -> $jb_version_root"
+    jb_schema="$(jb_artifact_schema "$jb_version_root")" \
+      || jb_die "managed version has an unknown artifact schema: $jb_version_root"
+    [[ "$jb_schema" == "$JB_ARTIFACT_SCHEMA" ]] || continue
+    jb_validate_version_artifact "$jb_version_root"
+    jb_recorded_identity="$(<"$jb_version_root/SIGNING_IDENTITY_SHA1")"
+    [[ "$jb_recorded_identity" == "$jb_requested_identity" ]] \
+      || jb_die "refusing signing identity change while managed app-v2 artifacts exist: $jb_version_root uses $jb_recorded_identity"
+  done
+}
+
+jb_assert_designated_requirement_compatible() {
+  local jb_new_version_root="$1"
+  local jb_current_root
+  local jb_current_schema
+  local jb_new_schema
+  local jb_new_requirement
+  local jb_current_requirement
+
+  [[ -L "$JB_CURRENT_VERSION_LINK" ]] || return 0
+  jb_current_root="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  jb_current_schema="$(jb_artifact_schema "$jb_current_root")" || return 1
+  jb_new_schema="$(jb_artifact_schema "$jb_new_version_root")" || return 1
+  if [[ "$jb_current_schema" != "$JB_ARTIFACT_SCHEMA" || "$jb_new_schema" != "$JB_ARTIFACT_SCHEMA" ]]; then
+    return 0
+  fi
+
+  jb_validate_version_artifact "$jb_current_root"
+  jb_validate_version_artifact "$jb_new_version_root"
+  jb_current_requirement="$(<"$jb_current_root/DESIGNATED_REQUIREMENT")"
+  jb_new_requirement="$(<"$jb_new_version_root/DESIGNATED_REQUIREMENT")"
+  [[ "$jb_current_requirement" == "$jb_new_requirement" ]] \
+    || jb_die "new app has an incompatible designated requirement; the running service was not stopped"
+}
+
+jb_configure_signing() {
+  local jb_requested_identity="${JANKYBORDERS_SIGNING_IDENTITY:-}"
+
+  [[ -n "$jb_requested_identity" ]] \
+    || jb_die "JANKYBORDERS_SIGNING_IDENTITY must be set to the certificate's 40-digit SHA-1 fingerprint"
+  if ! jb_requested_identity="$(jb_normalize_signing_identity "$jb_requested_identity")"; then
+    jb_die "JANKYBORDERS_SIGNING_IDENTITY must be exactly 40 hexadecimal digits"
+  fi
+  jb_signing_identity_available "$jb_requested_identity" \
+    || jb_die "$jb_requested_identity is not a valid '$JB_SIGNING_IDENTITY_NAME' code-signing identity with a private key"
+
+  jb_assert_managed_v2_identity_compatible "$jb_requested_identity"
+  [[ ! -L "$JB_SIGNING_IDENTITY_FILE" ]] \
+    || jb_die "refusing to replace symlinked signing identity configuration: $JB_SIGNING_IDENTITY_FILE"
+  [[ ! -e "$JB_SIGNING_IDENTITY_FILE" || -f "$JB_SIGNING_IDENTITY_FILE" ]] \
+    || jb_die "refusing to replace non-regular signing identity configuration: $JB_SIGNING_IDENTITY_FILE"
+
+  JB_TEMP_SIGNING_IDENTITY_FILE="$(/usr/bin/mktemp "$JB_INSTALL_ROOT/.signing-identity.XXXXXX")"
+  /bin/chmod 0600 "$JB_TEMP_SIGNING_IDENTITY_FILE"
+  printf '%s\n' "$jb_requested_identity" >"$JB_TEMP_SIGNING_IDENTITY_FILE"
+  /bin/mv -f "$JB_TEMP_SIGNING_IDENTITY_FILE" "$JB_SIGNING_IDENTITY_FILE"
+  JB_TEMP_SIGNING_IDENTITY_FILE=""
+  jb_info "configured signing identity $jb_requested_identity"
 }
 
 jb_validate_managed_plist() {
@@ -216,9 +542,43 @@ jb_validate_managed_plist() {
   if ! jb_existing_program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -expect string "$JB_PLIST" 2>/dev/null)"; then
     jb_die "refusing to replace LaunchAgent without ProgramArguments[0]: $JB_PLIST"
   fi
-  if [[ "$jb_existing_label" != "$JB_SERVICE_LABEL" || "$jb_existing_program" != "$JB_STABLE_BINARY" ]]; then
+  if [[ "$jb_existing_label" != "$JB_SERVICE_LABEL" ]]; then
     jb_die "refusing to replace unmanaged LaunchAgent: $JB_PLIST"
   fi
+  if [[ "$jb_existing_program" != "$JB_STABLE_BINARY" \
+    && "$jb_existing_program" != "$JB_CURRENT_VERSION_LINK/$JB_APP_NAME/Contents/MacOS/borders" ]]; then
+    jb_die "refusing to replace unmanaged LaunchAgent: $JB_PLIST"
+  fi
+}
+
+jb_service_program_for_schema() {
+  local jb_schema="$1"
+
+  case "$jb_schema" in
+    "$JB_ARTIFACT_SCHEMA")
+      printf '%s/%s/Contents/MacOS/borders\n' "$JB_CURRENT_VERSION_LINK" "$JB_APP_NAME"
+      ;;
+    "$JB_LEGACY_ARTIFACT_SCHEMA")
+      printf '%s\n' "$JB_STABLE_BINARY"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+jb_validate_plist_for_version() {
+  local jb_version_root="$1"
+  local jb_schema
+  local jb_expected_program
+  local jb_actual_program
+
+  [[ -f "$JB_PLIST" ]] || return 1
+  jb_schema="$(jb_artifact_schema "$jb_version_root")" || return 1
+  jb_expected_program="$(jb_service_program_for_schema "$jb_schema")" || return 1
+  jb_actual_program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -expect string "$JB_PLIST" 2>/dev/null)" \
+    || return 1
+  [[ "$jb_actual_program" == "$jb_expected_program" ]]
 }
 
 jb_atomic_link() {
@@ -247,64 +607,90 @@ jb_atomic_link() {
 
 jb_install_version() {
   local jb_revision
+  local jb_commit_count
   local jb_binary_digest
   local jb_binary_digest_short
   local jb_version
   local jb_version_root
+  local jb_temp_app
   local jb_version_binary
-  local jb_version_manpage
-  local jb_recorded_source_digest=""
-  local jb_recorded_installed_digest=""
+  local jb_temp_binary
+  local jb_recorded_source_digest
   local jb_installed_digest
-  local jb_identifier
+  local jb_designated_requirement
 
   [[ -x "$JB_SOURCE_BINARY" ]] || jb_die "missing built binary: $JB_SOURCE_BINARY"
   [[ -f "$JB_SOURCE_MANPAGE" ]] || jb_die "missing man page: $JB_SOURCE_MANPAGE"
+  [[ -f "$JB_INFO_PLIST_TEMPLATE" && ! -L "$JB_INFO_PLIST_TEMPLATE" ]] \
+    || jb_die "missing Info.plist template: $JB_INFO_PLIST_TEMPLATE"
+  /usr/bin/plutil -lint "$JB_INFO_PLIST_TEMPLATE" >/dev/null \
+    || jb_die "invalid Info.plist template: $JB_INFO_PLIST_TEMPLATE"
+  jb_require_configured_signing_identity
+  jb_assert_managed_v2_identity_compatible "$JB_SIGNING_IDENTITY"
 
   jb_revision="$(/usr/bin/git -C "$JB_SOURCE_ROOT" rev-parse --short=12 HEAD 2>/dev/null || true)"
   [[ -n "$jb_revision" ]] || jb_revision="unknown"
   jb_binary_digest="$(/usr/bin/shasum -a 256 "$JB_SOURCE_BINARY" | /usr/bin/awk '{print $1}')"
   jb_binary_digest_short="${jb_binary_digest:0:12}"
-  jb_version="$jb_revision-$jb_binary_digest_short-$JB_ARTIFACT_SCHEMA"
+  jb_commit_count="$(/usr/bin/git -C "$JB_SOURCE_ROOT" rev-list --count HEAD 2>/dev/null || true)"
+  [[ "$jb_commit_count" =~ ^[1-9][0-9]*$ ]] || jb_commit_count=1
+  jb_version="$jb_revision-$jb_binary_digest_short-${JB_SIGNING_IDENTITY:0:12}-$JB_ARTIFACT_SCHEMA"
   jb_version_root="$JB_INSTALL_ROOT/$jb_version"
-  jb_version_binary="$jb_version_root/bin/borders"
-  jb_version_manpage="$jb_version_root/share/man/man1/borders.1"
+  jb_version_binary="$jb_version_root/$JB_APP_NAME/Contents/MacOS/borders"
 
-  /bin/mkdir -p "$jb_version_root/bin" "$jb_version_root/share/man/man1"
-
-  if [[ -f "$jb_version_binary" && -f "$jb_version_root/SOURCE_BINARY_SHA256" ]]; then
+  if [[ -d "$jb_version_root" && ! -L "$jb_version_root" ]]; then
+    [[ -f "$jb_version_root/SOURCE_BINARY_SHA256" && ! -L "$jb_version_root/SOURCE_BINARY_SHA256" ]] \
+      || jb_die "incomplete version directory: $jb_version_root"
     jb_recorded_source_digest="$(<"$jb_version_root/SOURCE_BINARY_SHA256")"
     [[ "$jb_recorded_source_digest" == "$jb_binary_digest" ]] \
       || jb_die "version directory digest collision: $jb_version_root"
-    /usr/bin/codesign --verify --strict "$jb_version_binary"
-    jb_identifier="$(/usr/bin/codesign -dvv "$jb_version_binary" 2>&1 | /usr/bin/awk -F= '/^Identifier=/ { print substr($0, index($0, "=") + 1); exit }')"
-    [[ "$jb_identifier" == "$JB_SERVICE_LABEL" ]] \
-      || jb_die "installed version has unexpected code-sign identifier: $jb_identifier"
-    jb_installed_digest="$(/usr/bin/shasum -a 256 "$jb_version_binary" | /usr/bin/awk '{print $1}')"
-    if [[ -f "$jb_version_root/INSTALLED_BINARY_SHA256" ]]; then
-      jb_recorded_installed_digest="$(<"$jb_version_root/INSTALLED_BINARY_SHA256")"
-      [[ "$jb_recorded_installed_digest" == "$jb_installed_digest" ]] \
-        || jb_die "installed version digest mismatch: $jb_version_binary"
-    else
-      printf '%s\n' "$jb_installed_digest" >"$jb_version_root/INSTALLED_BINARY_SHA256"
-    fi
-  elif [[ -e "$jb_version_binary" || -e "$jb_version_root/SOURCE_BINARY_SHA256" ]]; then
-    jb_die "incomplete version directory: $jb_version_root"
+    jb_validate_version_artifact "$jb_version_root"
+    [[ "$(<"$jb_version_root/SIGNING_IDENTITY_SHA1")" == "$JB_SIGNING_IDENTITY" ]] \
+      || jb_die "installed version uses a different signing identity: $jb_version_root"
+    jb_plist_value_is "$jb_version_root/$JB_APP_NAME/Contents/Info.plist" \
+      CFBundleVersion string "$jb_commit_count" \
+      || jb_die "installed version has a different CFBundleVersion: $jb_version_root"
   else
-    JB_TEMP_BINARY_DIR="$(/usr/bin/mktemp -d "$jb_version_root/.install.XXXXXX")"
-    /usr/bin/install -m 0755 "$JB_SOURCE_BINARY" "$JB_TEMP_BINARY_DIR/borders"
-    /usr/bin/codesign --force --sign - --identifier "$JB_SERVICE_LABEL" "$JB_TEMP_BINARY_DIR/borders" >/dev/null
-    /usr/bin/codesign --verify --strict "$JB_TEMP_BINARY_DIR/borders"
-    jb_installed_digest="$(/usr/bin/shasum -a 256 "$JB_TEMP_BINARY_DIR/borders" | /usr/bin/awk '{print $1}')"
-    /bin/mv -f "$JB_TEMP_BINARY_DIR/borders" "$jb_version_binary"
-    /bin/rmdir "$JB_TEMP_BINARY_DIR"
-    JB_TEMP_BINARY_DIR=""
-    printf '%s\n' "$jb_binary_digest" >"$jb_version_root/SOURCE_BINARY_SHA256"
-    printf '%s\n' "$jb_installed_digest" >"$jb_version_root/INSTALLED_BINARY_SHA256"
-  fi
+    [[ ! -e "$jb_version_root" && ! -L "$jb_version_root" ]] \
+      || jb_die "incomplete version path: $jb_version_root"
+    JB_TEMP_VERSION_DIR="$(/usr/bin/mktemp -d "$JB_INSTALL_ROOT/.install.XXXXXX")"
+    jb_temp_app="$JB_TEMP_VERSION_DIR/$JB_APP_NAME"
+    jb_temp_binary="$jb_temp_app/Contents/MacOS/borders"
 
-  /usr/bin/install -m 0644 "$JB_SOURCE_MANPAGE" "$jb_version_manpage"
-  printf '%s\n' "$(/usr/bin/git -C "$JB_SOURCE_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)" >"$jb_version_root/REVISION"
+    /bin/mkdir -p \
+      "$jb_temp_app/Contents/MacOS" \
+      "$JB_TEMP_VERSION_DIR/bin" \
+      "$JB_TEMP_VERSION_DIR/share/man/man1"
+    /usr/bin/install -m 0644 "$JB_INFO_PLIST_TEMPLATE" "$jb_temp_app/Contents/Info.plist"
+    /usr/bin/plutil -replace CFBundleVersion -string "$jb_commit_count" "$jb_temp_app/Contents/Info.plist"
+    /usr/bin/install -m 0755 "$JB_SOURCE_BINARY" "$jb_temp_binary"
+    /usr/bin/install -m 0644 "$JB_SOURCE_MANPAGE" "$JB_TEMP_VERSION_DIR/share/man/man1/borders.1"
+    /bin/ln -s "../$JB_APP_NAME/Contents/MacOS/borders" "$JB_TEMP_VERSION_DIR/bin/borders"
+    printf '%s\n' "$JB_ARTIFACT_SCHEMA" >"$JB_TEMP_VERSION_DIR/ARTIFACT_SCHEMA"
+    printf '%s\n' "$jb_binary_digest" >"$JB_TEMP_VERSION_DIR/SOURCE_BINARY_SHA256"
+    printf '%s\n' "$JB_SIGNING_IDENTITY" >"$JB_TEMP_VERSION_DIR/SIGNING_IDENTITY_SHA1"
+    printf '%s\n' \
+      "$(/usr/bin/git -C "$JB_SOURCE_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)" \
+      >"$JB_TEMP_VERSION_DIR/REVISION"
+
+    /usr/bin/codesign --force --timestamp=none --sign "$JB_SIGNING_IDENTITY" \
+      --identifier "$JB_SERVICE_LABEL" "$jb_temp_app" >/dev/null
+    /usr/bin/codesign --verify --strict "$jb_temp_app"
+    /usr/bin/codesign --verify --strict \
+      "-R=certificate leaf = H\"$JB_SIGNING_IDENTITY\"" "$jb_temp_app" >/dev/null
+    jb_designated_requirement="$(jb_codesign_designated_requirement "$jb_temp_app")" \
+      || jb_die "could not read the signed app's designated requirement"
+    [[ -n "$jb_designated_requirement" ]] \
+      || jb_die "the signed app has an empty designated requirement"
+    printf '%s\n' "$jb_designated_requirement" >"$JB_TEMP_VERSION_DIR/DESIGNATED_REQUIREMENT"
+    jb_installed_digest="$(/usr/bin/shasum -a 256 "$jb_temp_binary" | /usr/bin/awk '{print $1}')"
+    printf '%s\n' "$jb_installed_digest" >"$JB_TEMP_VERSION_DIR/INSTALLED_BINARY_SHA256"
+
+    jb_app_artifact_valid "$JB_TEMP_VERSION_DIR" \
+      || jb_die "newly signed app-v2 artifact failed validation"
+    /bin/mv "$JB_TEMP_VERSION_DIR" "$jb_version_root"
+    JB_TEMP_VERSION_DIR=""
+  fi
 
   JB_INSTALLED_VERSION="$jb_version"
   JB_INSTALLED_VERSION_ROOT="$jb_version_root"
@@ -316,7 +702,7 @@ jb_activate_version() {
   local jb_old_current=""
   local jb_old_previous=""
 
-  [[ -x "$jb_version_root/bin/borders" ]] || jb_die "versioned binary is missing: $jb_version_root/bin/borders"
+  jb_validate_version_artifact "$jb_version_root"
   [[ -f "$jb_version_root/share/man/man1/borders.1" ]] || jb_die "versioned man page is missing under $jb_version_root"
 
   /bin/mkdir -p "$JB_INSTALL_ROOT" "$JB_BIN_DIR" "$JB_MAN_DIR"
@@ -375,11 +761,17 @@ jb_restore_install_links() {
 }
 
 jb_backup_plist() {
+  local jb_backup
+
   [[ -f "$JB_PLIST" ]] || return 0
 
   /bin/mkdir -p "$JB_LAUNCH_AGENTS_DIR"
-  JB_TEMP_PLIST_BACKUP="$(/usr/bin/mktemp "$JB_LAUNCH_AGENTS_DIR/.$JB_SERVICE_LABEL.backup.XXXXXX")"
-  /bin/cp -p "$JB_PLIST" "$JB_TEMP_PLIST_BACKUP"
+  jb_backup="$(/usr/bin/mktemp "$JB_LAUNCH_AGENTS_DIR/.$JB_SERVICE_LABEL.backup.XXXXXX")"
+  if ! /bin/cp -p "$JB_PLIST" "$jb_backup"; then
+    /bin/rm -f "$jb_backup" 2>/dev/null || true
+    return 1
+  fi
+  JB_TEMP_PLIST_BACKUP="$jb_backup"
 }
 
 jb_restore_plist() {
@@ -404,6 +796,17 @@ jb_restore_install_state() {
   return "$jb_result"
 }
 
+jb_restore_rollback_state() {
+  local jb_current="$1"
+  local jb_previous="$2"
+  local jb_result=0
+
+  jb_atomic_link "$jb_current" "$JB_CURRENT_VERSION_LINK" || jb_result=1
+  jb_atomic_link "$jb_previous" "$JB_PREVIOUS_VERSION_LINK" || jb_result=1
+  jb_restore_plist || jb_result=1
+  return "$jb_result"
+}
+
 jb_discard_plist_backup() {
   if [[ -n "$JB_TEMP_PLIST_BACKUP" ]]; then
     /bin/rm -f "$JB_TEMP_PLIST_BACKUP"
@@ -411,36 +814,43 @@ jb_discard_plist_backup() {
   fi
 }
 
-jb_write_plist() {
+jb_prepare_plist() {
+  local jb_schema="$1"
+  local jb_program
   local jb_service_path
   local jb_lang
 
-  /bin/mkdir -p "$JB_LAUNCH_AGENTS_DIR" "$JB_LOG_DIR"
-  JB_TEMP_PLIST="$(/usr/bin/mktemp "$JB_LAUNCH_AGENTS_DIR/.$JB_SERVICE_LABEL.XXXXXX")"
+  jb_program="$(jb_service_program_for_schema "$jb_schema")" || return 1
+  /bin/mkdir -p "$JB_LAUNCH_AGENTS_DIR" "$JB_LOG_DIR" || return 1
+  JB_TEMP_PLIST="$(/usr/bin/mktemp "$JB_LAUNCH_AGENTS_DIR/.$JB_SERVICE_LABEL.XXXXXX")" || return 1
   jb_service_path="$JB_BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   jb_lang="${LANG:-en_US.UTF-8}"
 
-  /usr/bin/plutil -create xml1 "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert Label -string "$JB_SERVICE_LABEL" "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert ProgramArguments -array "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert ProgramArguments.0 -string "$JB_STABLE_BINARY" "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert RunAtLoad -bool YES "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert KeepAlive -bool YES "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert ProcessType -string Interactive "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert StandardOutPath -string "$JB_LOG_DIR/borders.out.log" "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert StandardErrorPath -string "$JB_LOG_DIR/borders.err.log" "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert EnvironmentVariables -dictionary "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert EnvironmentVariables.HOME -string "$JB_USER_HOME" "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert EnvironmentVariables.PATH -string "$jb_service_path" "$JB_TEMP_PLIST"
-  /usr/bin/plutil -insert EnvironmentVariables.LANG -string "$jb_lang" "$JB_TEMP_PLIST"
+  /usr/bin/plutil -create xml1 "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert Label -string "$JB_SERVICE_LABEL" "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert ProgramArguments -array "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert ProgramArguments.0 -string "$jb_program" "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert RunAtLoad -bool YES "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert KeepAlive -bool YES "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert ProcessType -string Interactive "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert StandardOutPath -string "$JB_LOG_DIR/borders.out.log" "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert StandardErrorPath -string "$JB_LOG_DIR/borders.err.log" "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert EnvironmentVariables -dictionary "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert EnvironmentVariables.HOME -string "$JB_USER_HOME" "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert EnvironmentVariables.PATH -string "$jb_service_path" "$JB_TEMP_PLIST" || return 1
+  /usr/bin/plutil -insert EnvironmentVariables.LANG -string "$jb_lang" "$JB_TEMP_PLIST" || return 1
 
   if [[ -n "${XDG_CONFIG_HOME:-}" && "$XDG_CONFIG_HOME" == /* ]]; then
-    /usr/bin/plutil -insert EnvironmentVariables.XDG_CONFIG_HOME -string "$XDG_CONFIG_HOME" "$JB_TEMP_PLIST"
+    /usr/bin/plutil -insert EnvironmentVariables.XDG_CONFIG_HOME -string "$XDG_CONFIG_HOME" "$JB_TEMP_PLIST" || return 1
   fi
 
-  /usr/bin/plutil -lint "$JB_TEMP_PLIST" >/dev/null
-  /bin/chmod 0644 "$JB_TEMP_PLIST"
-  /bin/mv -f "$JB_TEMP_PLIST" "$JB_PLIST"
+  /usr/bin/plutil -lint "$JB_TEMP_PLIST" >/dev/null || return 1
+  /bin/chmod 0644 "$JB_TEMP_PLIST" || return 1
+}
+
+jb_commit_prepared_plist() {
+  [[ -n "$JB_TEMP_PLIST" && -f "$JB_TEMP_PLIST" && ! -L "$JB_TEMP_PLIST" ]] || return 1
+  /bin/mv -f "$JB_TEMP_PLIST" "$JB_PLIST" || return 1
   JB_TEMP_PLIST=""
 }
 
@@ -531,17 +941,51 @@ jb_validate_process_ownership() {
 }
 
 jb_preflight_installed_service() {
+  local jb_current_root
+
   jb_require_no_homebrew_service
   jb_validate_version_link "$JB_CURRENT_VERSION_LINK"
   jb_validate_version_link "$JB_PREVIOUS_VERSION_LINK"
-  jb_validate_managed_link "$JB_STABLE_BINARY"
-  jb_validate_managed_link "$JB_STABLE_MANPAGE"
+  jb_validate_managed_link "$JB_STABLE_BINARY" \
+    "$JB_CURRENT_VERSION_LINK/bin/borders"
+  jb_validate_managed_link "$JB_STABLE_MANPAGE" \
+    "$JB_CURRENT_VERSION_LINK/share/man/man1/borders.1"
   jb_validate_managed_plist
   [[ -L "$JB_CURRENT_VERSION_LINK" ]] || jb_die "current version link is missing: $JB_CURRENT_VERSION_LINK"
-  jb_validate_version_artifact "$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  jb_current_root="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  jb_validate_version_artifact "$jb_current_root"
   [[ -x "$JB_STABLE_BINARY" ]] || jb_die "installed binary is missing: $JB_STABLE_BINARY"
   [[ -f "$JB_PLIST" ]] || jb_die "LaunchAgent is missing: $JB_PLIST"
+  jb_validate_plist_for_version "$jb_current_root" \
+    || jb_die "LaunchAgent program does not match the current artifact schema: $JB_PLIST"
   jb_validate_process_ownership
+}
+
+jb_screen_capture_utility() {
+  local jb_option="$1"
+  local jb_current_root
+  local jb_schema
+  local jb_recorded_identity
+  local jb_app
+
+  jb_preflight_installed_service
+  jb_current_root="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  jb_schema="$(jb_artifact_schema "$jb_current_root")" \
+    || jb_die "current version has an unknown artifact schema"
+  [[ "$jb_schema" == "$JB_ARTIFACT_SCHEMA" ]] \
+    || jb_die "screen-capture permission commands require an installed app-v2 artifact; run 'make install-service' first"
+
+  jb_require_configured_signing_identity
+  jb_recorded_identity="$(<"$jb_current_root/SIGNING_IDENTITY_SHA1")"
+  [[ "$jb_recorded_identity" == "$JB_SIGNING_IDENTITY" ]] \
+    || jb_die "current app was not signed by the configured identity"
+  jb_app="$jb_current_root/$JB_APP_NAME"
+
+  /usr/bin/open -W -n -g \
+    -o /dev/stdout \
+    --stderr /dev/stderr \
+    "$jb_app" \
+    --args "$jb_option"
 }
 
 jb_stop_service() {
@@ -580,13 +1024,16 @@ jb_install() {
   local jb_old_previous=""
   local jb_old_stable_binary=""
   local jb_old_stable_manpage=""
+  local jb_new_schema
 
   /usr/bin/make -C "$JB_SOURCE_ROOT" all
   jb_require_no_homebrew_service
   jb_validate_version_link "$JB_CURRENT_VERSION_LINK"
   jb_validate_version_link "$JB_PREVIOUS_VERSION_LINK"
-  jb_validate_managed_link "$JB_STABLE_BINARY"
-  jb_validate_managed_link "$JB_STABLE_MANPAGE"
+  jb_validate_managed_link "$JB_STABLE_BINARY" \
+    "$JB_CURRENT_VERSION_LINK/bin/borders"
+  jb_validate_managed_link "$JB_STABLE_MANPAGE" \
+    "$JB_CURRENT_VERSION_LINK/share/man/man1/borders.1"
   jb_validate_managed_plist
   jb_validate_process_ownership
 
@@ -595,6 +1042,7 @@ jb_install() {
   fi
   if [[ -L "$JB_CURRENT_VERSION_LINK" ]]; then
     jb_old_current="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+    jb_validate_version_artifact "$jb_old_current"
   fi
   if [[ -L "$JB_PREVIOUS_VERSION_LINK" ]]; then
     jb_old_previous="$(/usr/bin/readlink "$JB_PREVIOUS_VERSION_LINK")"
@@ -606,22 +1054,32 @@ jb_install() {
     jb_old_stable_manpage="$(/usr/bin/readlink "$JB_STABLE_MANPAGE")"
   fi
   jb_install_version
+  jb_assert_designated_requirement_compatible "$JB_INSTALLED_VERSION_ROOT"
+  jb_new_schema="$(jb_artifact_schema "$JB_INSTALLED_VERSION_ROOT")" \
+    || jb_die "new version has an unknown artifact schema"
+  jb_prepare_plist "$jb_new_schema" \
+    || jb_die "LaunchAgent generation failed before the running service was stopped"
   jb_enter_critical_section
   jb_backup_plist
-  jb_write_plist
-  if ! jb_activate_version "$JB_INSTALLED_VERSION_ROOT"; then
-    jb_restore_install_state "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
-      || jb_die "activation failed and the previous installation state could not be restored"
-    jb_die "activation failed before the running service was stopped; previous state was restored"
-  fi
 
   if ! jb_stop_service || ! jb_wait_for_no_border_processes; then
-    jb_restore_install_state "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
-      || jb_die "service stop failed and the previous installation state could not be restored"
+    jb_discard_plist_backup || true
     if [[ -n "$jb_old_current" ]] && ! jb_service_loaded && ! jb_bootstrap_service; then
-      jb_die "service stop failed; previous links were restored but the previous service could not restart"
+      jb_die "service stop failed; the previous installation was unchanged but its service could not restart"
     fi
-    jb_die "service stop failed; previous links and service state were restored"
+    jb_die "service stop failed; the previous installation and service state were preserved"
+  fi
+
+  if ! jb_activate_version "$JB_INSTALLED_VERSION_ROOT" || ! jb_commit_prepared_plist; then
+    jb_restore_install_state "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
+      || jb_die "activation failed after service stop and the previous installation state could not be restored"
+    if [[ -n "$jb_old_current" ]] && jb_bootstrap_service; then
+      jb_die "activation failed after service stop; the previous version was restored and is running"
+    fi
+    if [[ -n "$jb_old_current" ]]; then
+      jb_die "activation failed after service stop; previous files were restored but the previous service could not restart"
+    fi
+    jb_die "first-install activation failed after service stop; managed installation state was removed"
   fi
 
   if ! jb_bootstrap_service; then
@@ -679,6 +1137,7 @@ jb_stop() {
 jb_rollback() {
   local jb_current
   local jb_previous
+  local jb_previous_schema
 
   jb_preflight_installed_service
   [[ -L "$JB_PREVIOUS_VERSION_LINK" ]] || jb_die "no previous installed version is available"
@@ -686,34 +1145,45 @@ jb_rollback() {
   jb_previous="$(/usr/bin/readlink "$JB_PREVIOUS_VERSION_LINK")"
   jb_validate_version_artifact "$jb_previous"
   [[ "$jb_current" != "$jb_previous" ]] || jb_die "current and previous both point to $jb_current"
+  jb_assert_designated_requirement_compatible "$jb_previous"
+  jb_previous_schema="$(jb_artifact_schema "$jb_previous")" \
+    || jb_die "rollback target has an unknown artifact schema: $jb_previous"
+  jb_prepare_plist "$jb_previous_schema" \
+    || jb_die "rollback LaunchAgent generation failed before the running service was stopped"
 
   jb_enter_critical_section
-  if ! jb_atomic_link "$jb_previous" "$JB_CURRENT_VERSION_LINK" \
-    || ! jb_atomic_link "$jb_current" "$JB_PREVIOUS_VERSION_LINK"; then
-    jb_atomic_link "$jb_current" "$JB_CURRENT_VERSION_LINK" || true
-    jb_atomic_link "$jb_previous" "$JB_PREVIOUS_VERSION_LINK" || true
-    jb_die "rollback links could not be switched; the running service was not stopped"
-  fi
+  jb_backup_plist
 
   if ! jb_stop_service || ! jb_wait_for_no_border_processes; then
-    jb_atomic_link "$jb_current" "$JB_CURRENT_VERSION_LINK" || jb_die "service stop failed and current could not be restored"
-    jb_atomic_link "$jb_previous" "$JB_PREVIOUS_VERSION_LINK" || jb_die "service stop failed and previous could not be restored"
+    jb_discard_plist_backup || true
     if ! jb_service_loaded && ! jb_bootstrap_service; then
-      jb_die "service stop failed; original links were restored but the original service could not restart"
+      jb_die "service stop failed; the installation was unchanged but the original service could not restart"
     fi
-    jb_die "service stop failed; original links and service state were restored"
+    jb_die "service stop failed; the original installation and service state were preserved"
+  fi
+
+  if ! jb_atomic_link "$jb_previous" "$JB_CURRENT_VERSION_LINK" \
+    || ! jb_atomic_link "$jb_current" "$JB_PREVIOUS_VERSION_LINK" \
+    || ! jb_commit_prepared_plist; then
+    jb_restore_rollback_state "$jb_current" "$jb_previous" \
+      || jb_die "rollback activation failed and the original installation state could not be restored"
+    if jb_bootstrap_service; then
+      jb_die "rollback activation failed; the original version was restored and is running"
+    fi
+    jb_die "rollback activation failed; original files were restored but the original service could not restart"
   fi
 
   if ! jb_bootstrap_service; then
     jb_info "rollback target failed to start; restoring $jb_current"
-    jb_atomic_link "$jb_current" "$JB_CURRENT_VERSION_LINK"
-    jb_atomic_link "$jb_previous" "$JB_PREVIOUS_VERSION_LINK"
+    jb_restore_rollback_state "$jb_current" "$jb_previous" \
+      || jb_die "rollback target failed and the original installation state could not be restored"
     if jb_bootstrap_service; then
       jb_die "rollback failed; the original version was restored and is running"
     fi
     jb_die "rollback and recovery both failed to start"
   fi
 
+  jb_discard_plist_backup
   jb_leave_critical_section
   jb_info "rolled back to $jb_previous"
   jb_info "service is running: $JB_SERVICE_TARGET"
@@ -723,6 +1193,8 @@ jb_status() {
   local jb_target="not installed"
   local jb_current="not installed"
   local jb_previous="not available"
+  local jb_schema="not available"
+  local jb_program="not available"
   local jb_output
   local jb_pid
 
@@ -733,6 +1205,7 @@ jb_status() {
   fi
   if [[ -L "$JB_CURRENT_VERSION_LINK" ]]; then
     jb_current="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+    jb_schema="$(jb_artifact_schema "$jb_current" 2>/dev/null || printf unknown)"
   fi
   if [[ -L "$JB_PREVIOUS_VERSION_LINK" ]]; then
     jb_previous="$(/usr/bin/readlink "$JB_PREVIOUS_VERSION_LINK")"
@@ -740,8 +1213,14 @@ jb_status() {
 
   printf 'binary: %s -> %s\n' "$JB_STABLE_BINARY" "$jb_target"
   printf 'current: %s\n' "$jb_current"
+  printf 'schema: %s\n' "$jb_schema"
   printf 'previous: %s\n' "$jb_previous"
   printf 'plist: %s\n' "$JB_PLIST"
+  if [[ -f "$JB_PLIST" ]]; then
+    jb_program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -expect string "$JB_PLIST" 2>/dev/null || printf invalid)"
+  fi
+  printf 'program: %s\n' "$jb_program"
+  printf 'signing configuration: %s\n' "$JB_SIGNING_IDENTITY_FILE"
   printf 'logs: %s\n' "$JB_LOG_DIR"
 
   if ! jb_output="$(/bin/launchctl print "$JB_SERVICE_TARGET" 2>&1)"; then
@@ -757,8 +1236,10 @@ jb_status() {
 jb_uninstall() {
   jb_validate_version_link "$JB_CURRENT_VERSION_LINK"
   jb_validate_version_link "$JB_PREVIOUS_VERSION_LINK"
-  jb_validate_managed_link "$JB_STABLE_BINARY"
-  jb_validate_managed_link "$JB_STABLE_MANPAGE"
+  jb_validate_managed_link "$JB_STABLE_BINARY" \
+    "$JB_CURRENT_VERSION_LINK/bin/borders"
+  jb_validate_managed_link "$JB_STABLE_MANPAGE" \
+    "$JB_CURRENT_VERSION_LINK/share/man/man1/borders.1"
   jb_validate_managed_plist
   jb_validate_process_ownership
   jb_enter_critical_section
@@ -780,7 +1261,7 @@ jb_require_supported_environment
 JB_ACTION="${1:-}"
 
 case "$JB_ACTION" in
-  install|start|stop|restart|rollback|uninstall)
+  install|start|stop|restart|rollback|uninstall|configure-signing|screen-capture-status|request-screen-capture)
     jb_acquire_lock
     ;;
 esac
@@ -811,6 +1292,21 @@ case "$JB_ACTION" in
     ;;
   uninstall)
     jb_uninstall
+    ;;
+  signing-help)
+    jb_signing_help
+    ;;
+  signing-status)
+    jb_signing_status
+    ;;
+  configure-signing)
+    jb_configure_signing
+    ;;
+  screen-capture-status)
+    jb_screen_capture_utility --screen-capture-status
+    ;;
+  request-screen-capture)
+    jb_screen_capture_utility --request-screen-capture
     ;;
   *)
     jb_usage >&2

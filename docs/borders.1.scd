@@ -8,6 +8,10 @@ JankyBorders - A window border system for macOS
 
 *borders [options]*
 
+*borders --screen-capture-status*
+
+*borders --request-screen-capture*
+
 # DESCRIPTION
 
 *JankyBorders* is a lightweight tool designed to add colored borders to
@@ -70,6 +74,20 @@ verification boundary.
 	Once this list is populated, only applications listed here are considered
 	for receiving a border. If the whitelist is empty (default) it is inactive.
 
+*--screen-capture-status*
+	Prints whether screen-recording permission is granted. This utility exits
+	without starting a border instance or requesting Accessibility permission.
+
+*--request-screen-capture*
+	Explicitly asks macOS for the screen-recording permission needed by features
+	that sample window contents. This utility exits without starting a border
+	instance or requesting Accessibility permission. After granting access in
+	System Settings, restart a running local service with
+	_make service-restart_. The LaunchAgent never invokes this option at login.
+	When using the Make target, install the signed app first; the target launches
+	the app through LaunchServices so permission is attached to the service
+	identity.
+
 If an instance of *borders* is already running, subsequent invocations will
 update the existing process with the new arguments.
 
@@ -120,6 +138,31 @@ $HOME/.config/borders/bordersrc, or the legacy $HOME/.bordersrc path.
 *<application_list>*
 	A comma separated list of application names. This argument should be
 	quoted.
+
+# LOCAL SERVICE
+
+When building this fork from its source checkout, create and configure one
+stable local code-signing identity before the first service installation:
+
+	_make signing-help_ ++
+	_make configure-signing JANKYBORDERS_SIGNING_IDENTITY=YOUR_40_HEX_SHA1_ ++
+	_make signing-status_
+
+The installer packages a versioned _JankyBorders.app_ and never creates,
+trusts, exports, or silently replaces the configured identity. The stable
+application identity is intended to preserve macOS screen-recording permission
+across compatible updates and rollbacks.
+
+Manage the per-user LaunchAgent with:
+
+	_make install-service_ ++
+	_make update-service_ ++
+	_make rollback-service_ ++
+	_make service-status_ ++
+	_make service-start_ ++
+	_make service-stop_ ++
+	_make service-restart_ ++
+	_make uninstall-service_
 
 # BUGS
 
