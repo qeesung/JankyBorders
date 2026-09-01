@@ -19,6 +19,65 @@ brew tap FelixKratz/formulae
 brew install borders
 ```
 
+#### Install this fork as a user service
+
+To install the current checkout instead of the upstream Homebrew build, use:
+
+```bash
+brew services stop borders # safe when the Homebrew service is already stopped
+make install-service
+```
+
+This builds the current source, installs a signed and versioned copy below
+`$HOME/.local/opt/jankyborders`, updates `$HOME/.local/bin/borders`, and starts
+the user LaunchAgent `io.github.qeesung.jankyborders.local`. It does not modify the
+Homebrew Cellar, so the Homebrew build remains available as a rollback.
+
+The service starts `borders` without arguments so that the normal
+`bordersrc` lookup described below still applies. Its `PATH` puts
+`$HOME/.local/bin` first, which also ensures that a `borders` command inside
+the configuration file talks to this fork.
+
+Use exactly one primary startup mechanism. While this LaunchAgent is installed,
+do not also start `borders` from `yabairc`, `aerospace.toml`, or
+`brew services`; competing instances share the same command port and can make
+the service restart repeatedly. Put appearance options in `bordersrc` instead.
+
+After pulling or changing the source, rebuild and atomically switch the local
+installation with:
+
+```bash
+make update-service
+```
+
+Service lifecycle commands are:
+
+```bash
+make service-status
+make service-stop
+make service-start
+make service-restart
+make rollback-service
+make uninstall-service
+```
+
+`rollback-service` swaps the `current` and `previous` version links and restarts
+the service when a compatible previous service installation exists. A first
+install or migration from an older local layout may not have a rollback target
+until the next successful update. `service-stop` disables the LaunchAgent until
+`service-start` or a new install, including across login sessions.
+
+`uninstall-service` removes the LaunchAgent and the managed command/man-page
+links but preserves versioned files under `$HOME/.local/opt/jankyborders` for
+manual inspection. Logs are written to `$HOME/Library/Logs/JankyBorders`. To
+return to the Homebrew service, run:
+
+```bash
+make uninstall-service
+hash -r
+brew services start borders
+```
+
 For a comprehensive overview of all available options and commands, consult the
 man page: `man borders`. A rendered version of the man page is available in the
 [Wiki](https://github.com/FelixKratz/JankyBorders/wiki/Man-Page).

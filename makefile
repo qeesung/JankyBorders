@@ -1,10 +1,13 @@
 FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c src/space_bridge.m
+HEADERS = $(wildcard src/*.h src/misc/*.h)
 LIBS = -framework AppKit -framework CoreVideo -F/System/Library/PrivateFrameworks/ -framework SkyLight
 SAFETY_TEST_FILES = tests/safety_tests.c src/parse.c src/mach.c src/hashtable.c
 SANITIZER_FLAGS = -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 THREAD_SANITIZER_FLAGS = -fsanitize=thread -fno-omit-frame-pointer
 
-all: | bin
+all: bin/borders
+
+bin/borders: $(FILES) $(HEADERS) makefile | bin
 	clang -std=c99 -O3 -g $(FILES) -o bin/borders $(LIBS)
 
 debug: | bin
@@ -12,6 +15,7 @@ debug: | bin
 
 warnings: | bin
 	clang -std=c99 -Wall -Wextra -Werror -O0 -g $(FILES) -o bin/warnings-check $(LIBS)
+	/bin/bash -n scripts/local-service
 
 asan: | bin
 	clang -std=c99 -Wall -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g $(FILES) -o bin/debug $(LIBS)
@@ -60,10 +64,32 @@ test-sanitize: | bin
 test-thread: | bin
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(THREAD_SANITIZER_FLAGS) tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test_tsan -framework CoreVideo
 	TSAN_OPTIONS=halt_on_error=1 ./bin/animation_lifecycle_test_tsan
+
+install-service update-service:
+	@/bin/bash scripts/local-service install
+
+service-start:
+	@/bin/bash scripts/local-service start
+
+service-stop:
+	@/bin/bash scripts/local-service stop
+
+service-restart:
+	@/bin/bash scripts/local-service restart
+
+rollback-service:
+	@/bin/bash scripts/local-service rollback
+
+service-status:
+	@/bin/bash scripts/local-service status
+
+uninstall-service:
+	@/bin/bash scripts/local-service uninstall
+
 bin:
 	mkdir bin
 
 clean:
 	rm -rf bin
 
-.PHONY: all debug warnings asan test test-sanitize test-thread clean
+.PHONY: all debug warnings asan test test-sanitize test-thread clean install-service update-service service-start service-stop service-restart rollback-service service-status uninstall-service

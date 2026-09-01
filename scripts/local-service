@@ -1,0 +1,819 @@
+#!/bin/bash
+
+set -euo pipefail
+
+JB_SERVICE_LABEL="io.github.qeesung.jankyborders.local"
+JB_ARTIFACT_SCHEMA="service-v1"
+JB_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+JB_SOURCE_ROOT="$(cd "$JB_SCRIPT_DIR/.." && pwd -P)"
+JB_USER_HOME="$(cd "${HOME:?HOME must be set}" && pwd -P)"
+JB_INSTALL_ROOT="$JB_USER_HOME/.local/opt/jankyborders"
+JB_LOCK_FILE="$JB_INSTALL_ROOT/.service.lock"
+JB_BIN_DIR="$JB_USER_HOME/.local/bin"
+JB_MAN_DIR="$JB_USER_HOME/.local/share/man/man1"
+JB_LAUNCH_AGENTS_DIR="$JB_USER_HOME/Library/LaunchAgents"
+JB_LOG_DIR="$JB_USER_HOME/Library/Logs/JankyBorders"
+JB_SOURCE_BINARY="$JB_SOURCE_ROOT/bin/borders"
+JB_SOURCE_MANPAGE="$JB_SOURCE_ROOT/docs/borders.1"
+JB_CURRENT_VERSION_LINK="$JB_INSTALL_ROOT/current"
+JB_PREVIOUS_VERSION_LINK="$JB_INSTALL_ROOT/previous"
+JB_STABLE_BINARY="$JB_BIN_DIR/borders"
+JB_STABLE_MANPAGE="$JB_MAN_DIR/borders.1"
+JB_PLIST="$JB_LAUNCH_AGENTS_DIR/$JB_SERVICE_LABEL.plist"
+JB_DOMAIN="gui/$(/usr/bin/id -u)"
+JB_SERVICE_TARGET="$JB_DOMAIN/$JB_SERVICE_LABEL"
+JB_TEMP_BINARY_DIR=""
+JB_TEMP_PLIST=""
+JB_TEMP_PLIST_BACKUP=""
+JB_TEMP_LINK_DIR=""
+
+jb_cleanup() {
+  if [[ -n "$JB_TEMP_BINARY_DIR" && -d "$JB_TEMP_BINARY_DIR" ]]; then
+    /bin/rm -f "$JB_TEMP_BINARY_DIR/borders"
+    /bin/rmdir "$JB_TEMP_BINARY_DIR" 2>/dev/null || true
+  fi
+  if [[ -n "$JB_TEMP_PLIST" ]]; then
+    /bin/rm -f "$JB_TEMP_PLIST"
+  fi
+  if [[ -n "$JB_TEMP_PLIST_BACKUP" ]]; then
+    /bin/rm -f "$JB_TEMP_PLIST_BACKUP"
+  fi
+  if [[ -n "$JB_TEMP_LINK_DIR" && -d "$JB_TEMP_LINK_DIR" ]]; then
+    /bin/rm -f "$JB_TEMP_LINK_DIR/link"
+    /bin/rmdir "$JB_TEMP_LINK_DIR" 2>/dev/null || true
+  fi
+}
+
+trap jb_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+jb_enter_critical_section() {
+  trap '' HUP INT TERM
+}
+
+jb_leave_critical_section() {
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+jb_usage() {
+  /bin/cat <<'EOF'
+Usage: scripts/local-service <command>
+
+Commands:
+  install    Install this checkout and restart the user LaunchAgent
+  rollback   Swap to the previously installed version and restart
+  start      Start the installed user LaunchAgent
+  stop       Stop the user LaunchAgent
+  restart    Restart the installed user LaunchAgent
+  status     Show the installed version and LaunchAgent status
+  uninstall  Stop the service and remove managed entry points
+EOF
+}
+
+jb_die() {
+  printf 'local-service: %s\n' "$*" >&2
+  exit 1
+}
+
+jb_info() {
+  printf 'local-service: %s\n' "$*"
+}
+
+jb_require_supported_environment() {
+  [[ "$(/usr/bin/uname -s)" == "Darwin" ]] || jb_die "this installer only supports macOS"
+  [[ "$(/usr/bin/id -u)" -ne 0 ]] || jb_die "do not run this user service installer with sudo"
+  [[ "$JB_USER_HOME" == /* ]] || jb_die "HOME must be an absolute path"
+  [[ "$JB_INSTALL_ROOT" == "$JB_USER_HOME/"* ]] || jb_die "install root must be below HOME"
+  [[ "$JB_BIN_DIR" == "$JB_USER_HOME/"* ]] || jb_die "binary directory must be below HOME"
+  [[ "$JB_MAN_DIR" == "$JB_USER_HOME/"* ]] || jb_die "man-page directory must be below HOME"
+  [[ "$JB_LAUNCH_AGENTS_DIR" == "$JB_USER_HOME/"* ]] || jb_die "LaunchAgents directory must be below HOME"
+  [[ "$JB_LOG_DIR" == "$JB_USER_HOME/"* ]] || jb_die "log directory must be below HOME"
+}
+
+jb_acquire_lock() {
+  local jb_fd_identity
+  local jb_lock_identity
+  local jb_old_umask
+
+  [[ ! -L "$JB_INSTALL_ROOT" ]] || jb_die "install root must not be a symlink: $JB_INSTALL_ROOT"
+  [[ ! -e "$JB_INSTALL_ROOT" || -d "$JB_INSTALL_ROOT" ]] || jb_die "install root is not a directory: $JB_INSTALL_ROOT"
+  /bin/mkdir -p "$JB_INSTALL_ROOT"
+  [[ ! -L "$JB_LOCK_FILE" ]] || jb_die "service lock must not be a symlink: $JB_LOCK_FILE"
+  [[ ! -e "$JB_LOCK_FILE" || -f "$JB_LOCK_FILE" ]] || jb_die "service lock is not a regular file: $JB_LOCK_FILE"
+
+  jb_old_umask="$(umask)"
+  umask 077
+  if ! exec 9>>"$JB_LOCK_FILE"; then
+    umask "$jb_old_umask"
+    jb_die "could not open service lock: $JB_LOCK_FILE"
+  fi
+  umask "$jb_old_umask"
+
+  if [[ -L "$JB_LOCK_FILE" || ! -f "$JB_LOCK_FILE" ]]; then
+    exec 9>&-
+    jb_die "service lock changed while opening: $JB_LOCK_FILE"
+  fi
+  jb_lock_identity="$(/usr/bin/stat -f '%i' "$JB_LOCK_FILE")"
+  jb_fd_identity="$(/usr/bin/stat -f '%i' /dev/fd/9)"
+  if [[ "$jb_lock_identity" != "$jb_fd_identity" ]]; then
+    exec 9>&-
+    jb_die "service lock identity changed while opening: $JB_LOCK_FILE"
+  fi
+  /bin/chmod 0600 /dev/fd/9
+  if ! /usr/bin/lockf -t 30 9; then
+    jb_die "timed out waiting for another local-service operation"
+  fi
+}
+
+jb_service_loaded() {
+  /bin/launchctl print "$JB_SERVICE_TARGET" >/dev/null 2>&1
+}
+
+jb_border_pids() {
+  /usr/bin/pgrep -u "$(/usr/bin/id -u)" -x borders 2>/dev/null || true
+}
+
+jb_require_no_homebrew_service() {
+  local jb_target
+
+  for jb_target in \
+    "$JB_DOMAIN/homebrew.mxcl.borders" \
+    "user/$(/usr/bin/id -u)/homebrew.mxcl.borders" \
+    "system/homebrew.mxcl.borders"; do
+    if /bin/launchctl print "$jb_target" >/dev/null 2>&1; then
+      jb_die "the Homebrew borders service is loaded at $jb_target; run 'brew services stop borders' first"
+    fi
+  done
+}
+
+jb_validate_managed_link() {
+  local jb_path="$1"
+  local jb_target
+
+  if [[ -L "$jb_path" ]]; then
+    jb_target="$(/usr/bin/readlink "$jb_path")"
+    if [[ "$jb_target" != "$JB_INSTALL_ROOT/"* ]]; then
+      jb_die "refusing to replace unmanaged symlink: $jb_path -> $jb_target"
+    fi
+    if [[ -d "$jb_path" ]]; then
+      jb_die "refusing to replace a directory symlink: $jb_path -> $jb_target"
+    fi
+  elif [[ -e "$jb_path" ]]; then
+    jb_die "refusing to replace unmanaged path: $jb_path"
+  fi
+}
+
+jb_validate_version_link() {
+  local jb_path="$1"
+  local jb_target
+
+  [[ -e "$jb_path" || -L "$jb_path" ]] || return 0
+  [[ -L "$jb_path" ]] || jb_die "refusing to replace unmanaged version path: $jb_path"
+  jb_target="$(/usr/bin/readlink "$jb_path")"
+  [[ "$jb_target" == "$JB_INSTALL_ROOT/"* ]] || jb_die "invalid managed version link: $jb_path -> $jb_target"
+  [[ -d "$jb_target" ]] || jb_die "managed version target is missing: $jb_path -> $jb_target"
+}
+
+jb_version_artifact_valid() {
+  local jb_version_root="$1"
+  local jb_binary="$jb_version_root/bin/borders"
+  local jb_identifier
+  local jb_recorded_digest
+  local jb_actual_digest
+
+  [[ -x "$jb_binary" ]] || return 1
+  [[ -f "$jb_version_root/INSTALLED_BINARY_SHA256" ]] || return 1
+  /usr/bin/codesign --verify --strict "$jb_binary" >/dev/null 2>&1 || return 1
+  jb_identifier="$(/usr/bin/codesign -dvv "$jb_binary" 2>&1 | /usr/bin/awk -F= '/^Identifier=/ { print substr($0, index($0, "=") + 1); exit }')" \
+    || return 1
+  [[ "$jb_identifier" == "$JB_SERVICE_LABEL" ]] || return 1
+  jb_recorded_digest="$(<"$jb_version_root/INSTALLED_BINARY_SHA256")"
+  jb_actual_digest="$(/usr/bin/shasum -a 256 "$jb_binary" | /usr/bin/awk '{print $1}')"
+  [[ "$jb_recorded_digest" == "$jb_actual_digest" ]]
+}
+
+jb_validate_version_artifact() {
+  local jb_version_root="$1"
+
+  jb_version_artifact_valid "$jb_version_root" \
+    || jb_die "invalid or incompatible version artifact: $jb_version_root"
+}
+
+jb_validate_managed_plist() {
+  local jb_existing_label
+  local jb_existing_program
+
+  [[ -e "$JB_PLIST" ]] || return 0
+  [[ ! -L "$JB_PLIST" ]] || jb_die "refusing to replace a symlinked LaunchAgent: $JB_PLIST"
+
+  if ! jb_existing_label="$(/usr/bin/plutil -extract Label raw -expect string "$JB_PLIST" 2>/dev/null)"; then
+    jb_die "refusing to replace invalid LaunchAgent: $JB_PLIST"
+  fi
+  if ! jb_existing_program="$(/usr/bin/plutil -extract ProgramArguments.0 raw -expect string "$JB_PLIST" 2>/dev/null)"; then
+    jb_die "refusing to replace LaunchAgent without ProgramArguments[0]: $JB_PLIST"
+  fi
+  if [[ "$jb_existing_label" != "$JB_SERVICE_LABEL" || "$jb_existing_program" != "$JB_STABLE_BINARY" ]]; then
+    jb_die "refusing to replace unmanaged LaunchAgent: $JB_PLIST"
+  fi
+}
+
+jb_atomic_link() {
+  local jb_target="$1"
+  local jb_link="$2"
+  local jb_link_parent
+
+  jb_link_parent="$(/usr/bin/dirname "$jb_link")"
+  if ! JB_TEMP_LINK_DIR="$(/usr/bin/mktemp -d "$jb_link_parent/.jankyborders-link.XXXXXX")"; then
+    return 1
+  fi
+  if ! /bin/ln -s "$jb_target" "$JB_TEMP_LINK_DIR/link"; then
+    /bin/rmdir "$JB_TEMP_LINK_DIR" 2>/dev/null || true
+    JB_TEMP_LINK_DIR=""
+    return 1
+  fi
+  if ! /bin/mv -h -f "$JB_TEMP_LINK_DIR/link" "$jb_link"; then
+    /bin/rm -f "$JB_TEMP_LINK_DIR/link"
+    /bin/rmdir "$JB_TEMP_LINK_DIR" 2>/dev/null || true
+    JB_TEMP_LINK_DIR=""
+    return 1
+  fi
+  /bin/rmdir "$JB_TEMP_LINK_DIR" 2>/dev/null || true
+  JB_TEMP_LINK_DIR=""
+}
+
+jb_install_version() {
+  local jb_revision
+  local jb_binary_digest
+  local jb_binary_digest_short
+  local jb_version
+  local jb_version_root
+  local jb_version_binary
+  local jb_version_manpage
+  local jb_recorded_source_digest=""
+  local jb_recorded_installed_digest=""
+  local jb_installed_digest
+  local jb_identifier
+
+  [[ -x "$JB_SOURCE_BINARY" ]] || jb_die "missing built binary: $JB_SOURCE_BINARY"
+  [[ -f "$JB_SOURCE_MANPAGE" ]] || jb_die "missing man page: $JB_SOURCE_MANPAGE"
+
+  jb_revision="$(/usr/bin/git -C "$JB_SOURCE_ROOT" rev-parse --short=12 HEAD 2>/dev/null || true)"
+  [[ -n "$jb_revision" ]] || jb_revision="unknown"
+  jb_binary_digest="$(/usr/bin/shasum -a 256 "$JB_SOURCE_BINARY" | /usr/bin/awk '{print $1}')"
+  jb_binary_digest_short="${jb_binary_digest:0:12}"
+  jb_version="$jb_revision-$jb_binary_digest_short-$JB_ARTIFACT_SCHEMA"
+  jb_version_root="$JB_INSTALL_ROOT/$jb_version"
+  jb_version_binary="$jb_version_root/bin/borders"
+  jb_version_manpage="$jb_version_root/share/man/man1/borders.1"
+
+  /bin/mkdir -p "$jb_version_root/bin" "$jb_version_root/share/man/man1"
+
+  if [[ -f "$jb_version_binary" && -f "$jb_version_root/SOURCE_BINARY_SHA256" ]]; then
+    jb_recorded_source_digest="$(<"$jb_version_root/SOURCE_BINARY_SHA256")"
+    [[ "$jb_recorded_source_digest" == "$jb_binary_digest" ]] \
+      || jb_die "version directory digest collision: $jb_version_root"
+    /usr/bin/codesign --verify --strict "$jb_version_binary"
+    jb_identifier="$(/usr/bin/codesign -dvv "$jb_version_binary" 2>&1 | /usr/bin/awk -F= '/^Identifier=/ { print substr($0, index($0, "=") + 1); exit }')"
+    [[ "$jb_identifier" == "$JB_SERVICE_LABEL" ]] \
+      || jb_die "installed version has unexpected code-sign identifier: $jb_identifier"
+    jb_installed_digest="$(/usr/bin/shasum -a 256 "$jb_version_binary" | /usr/bin/awk '{print $1}')"
+    if [[ -f "$jb_version_root/INSTALLED_BINARY_SHA256" ]]; then
+      jb_recorded_installed_digest="$(<"$jb_version_root/INSTALLED_BINARY_SHA256")"
+      [[ "$jb_recorded_installed_digest" == "$jb_installed_digest" ]] \
+        || jb_die "installed version digest mismatch: $jb_version_binary"
+    else
+      printf '%s\n' "$jb_installed_digest" >"$jb_version_root/INSTALLED_BINARY_SHA256"
+    fi
+  elif [[ -e "$jb_version_binary" || -e "$jb_version_root/SOURCE_BINARY_SHA256" ]]; then
+    jb_die "incomplete version directory: $jb_version_root"
+  else
+    JB_TEMP_BINARY_DIR="$(/usr/bin/mktemp -d "$jb_version_root/.install.XXXXXX")"
+    /usr/bin/install -m 0755 "$JB_SOURCE_BINARY" "$JB_TEMP_BINARY_DIR/borders"
+    /usr/bin/codesign --force --sign - --identifier "$JB_SERVICE_LABEL" "$JB_TEMP_BINARY_DIR/borders" >/dev/null
+    /usr/bin/codesign --verify --strict "$JB_TEMP_BINARY_DIR/borders"
+    jb_installed_digest="$(/usr/bin/shasum -a 256 "$JB_TEMP_BINARY_DIR/borders" | /usr/bin/awk '{print $1}')"
+    /bin/mv -f "$JB_TEMP_BINARY_DIR/borders" "$jb_version_binary"
+    /bin/rmdir "$JB_TEMP_BINARY_DIR"
+    JB_TEMP_BINARY_DIR=""
+    printf '%s\n' "$jb_binary_digest" >"$jb_version_root/SOURCE_BINARY_SHA256"
+    printf '%s\n' "$jb_installed_digest" >"$jb_version_root/INSTALLED_BINARY_SHA256"
+  fi
+
+  /usr/bin/install -m 0644 "$JB_SOURCE_MANPAGE" "$jb_version_manpage"
+  printf '%s\n' "$(/usr/bin/git -C "$JB_SOURCE_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)" >"$jb_version_root/REVISION"
+
+  JB_INSTALLED_VERSION="$jb_version"
+  JB_INSTALLED_VERSION_ROOT="$jb_version_root"
+  JB_INSTALLED_BINARY="$jb_version_binary"
+}
+
+jb_activate_version() {
+  local jb_version_root="$1"
+  local jb_old_current=""
+  local jb_old_previous=""
+
+  [[ -x "$jb_version_root/bin/borders" ]] || jb_die "versioned binary is missing: $jb_version_root/bin/borders"
+  [[ -f "$jb_version_root/share/man/man1/borders.1" ]] || jb_die "versioned man page is missing under $jb_version_root"
+
+  /bin/mkdir -p "$JB_INSTALL_ROOT" "$JB_BIN_DIR" "$JB_MAN_DIR"
+  if [[ -L "$JB_CURRENT_VERSION_LINK" ]]; then
+    jb_old_current="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  fi
+  if [[ -L "$JB_PREVIOUS_VERSION_LINK" ]]; then
+    jb_old_previous="$(/usr/bin/readlink "$JB_PREVIOUS_VERSION_LINK")"
+    if ! jb_version_artifact_valid "$jb_old_previous"; then
+      /bin/rm "$JB_PREVIOUS_VERSION_LINK" || return 1
+    fi
+  fi
+  if [[ -n "$jb_old_current" && "$jb_old_current" != "$jb_version_root" ]]; then
+    if jb_version_artifact_valid "$jb_old_current"; then
+      jb_atomic_link "$jb_old_current" "$JB_PREVIOUS_VERSION_LINK" || return 1
+    else
+      jb_info "not recording incompatible artifact as previous: $jb_old_current"
+    fi
+  fi
+  jb_atomic_link "$jb_version_root" "$JB_CURRENT_VERSION_LINK" || return 1
+  jb_atomic_link "$JB_CURRENT_VERSION_LINK/bin/borders" "$JB_STABLE_BINARY" || return 1
+  jb_atomic_link "$JB_CURRENT_VERSION_LINK/share/man/man1/borders.1" "$JB_STABLE_MANPAGE" || return 1
+}
+
+jb_restore_link() {
+  local jb_target="$1"
+  local jb_link="$2"
+  local jb_active_target
+
+  if [[ -n "$jb_target" ]]; then
+    jb_atomic_link "$jb_target" "$jb_link"
+    return $?
+  fi
+
+  if [[ -L "$jb_link" ]]; then
+    jb_active_target="$(/usr/bin/readlink "$jb_link")"
+    [[ "$jb_active_target" == "$JB_INSTALL_ROOT/"* ]] || return 1
+    /bin/rm "$jb_link" || return 1
+  elif [[ -e "$jb_link" ]]; then
+    return 1
+  fi
+}
+
+jb_restore_install_links() {
+  local jb_old_current="$1"
+  local jb_old_previous="$2"
+  local jb_old_stable_binary="$3"
+  local jb_old_stable_manpage="$4"
+  local jb_result=0
+
+  jb_restore_link "$jb_old_current" "$JB_CURRENT_VERSION_LINK" || jb_result=1
+  jb_restore_link "$jb_old_previous" "$JB_PREVIOUS_VERSION_LINK" || jb_result=1
+  jb_restore_link "$jb_old_stable_binary" "$JB_STABLE_BINARY" || jb_result=1
+  jb_restore_link "$jb_old_stable_manpage" "$JB_STABLE_MANPAGE" || jb_result=1
+  return "$jb_result"
+}
+
+jb_backup_plist() {
+  [[ -f "$JB_PLIST" ]] || return 0
+
+  /bin/mkdir -p "$JB_LAUNCH_AGENTS_DIR"
+  JB_TEMP_PLIST_BACKUP="$(/usr/bin/mktemp "$JB_LAUNCH_AGENTS_DIR/.$JB_SERVICE_LABEL.backup.XXXXXX")"
+  /bin/cp -p "$JB_PLIST" "$JB_TEMP_PLIST_BACKUP"
+}
+
+jb_restore_plist() {
+  if [[ -n "$JB_TEMP_PLIST_BACKUP" ]]; then
+    /bin/mv -f "$JB_TEMP_PLIST_BACKUP" "$JB_PLIST" || return 1
+    JB_TEMP_PLIST_BACKUP=""
+  else
+    /bin/rm -f "$JB_PLIST" || return 1
+  fi
+}
+
+jb_restore_install_state() {
+  local jb_old_current="$1"
+  local jb_old_previous="$2"
+  local jb_old_stable_binary="$3"
+  local jb_old_stable_manpage="$4"
+  local jb_result=0
+
+  jb_restore_install_links "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
+    || jb_result=1
+  jb_restore_plist || jb_result=1
+  return "$jb_result"
+}
+
+jb_discard_plist_backup() {
+  if [[ -n "$JB_TEMP_PLIST_BACKUP" ]]; then
+    /bin/rm -f "$JB_TEMP_PLIST_BACKUP"
+    JB_TEMP_PLIST_BACKUP=""
+  fi
+}
+
+jb_write_plist() {
+  local jb_service_path
+  local jb_lang
+
+  /bin/mkdir -p "$JB_LAUNCH_AGENTS_DIR" "$JB_LOG_DIR"
+  JB_TEMP_PLIST="$(/usr/bin/mktemp "$JB_LAUNCH_AGENTS_DIR/.$JB_SERVICE_LABEL.XXXXXX")"
+  jb_service_path="$JB_BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  jb_lang="${LANG:-en_US.UTF-8}"
+
+  /usr/bin/plutil -create xml1 "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert Label -string "$JB_SERVICE_LABEL" "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert ProgramArguments -array "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert ProgramArguments.0 -string "$JB_STABLE_BINARY" "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert RunAtLoad -bool YES "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert KeepAlive -bool YES "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert ProcessType -string Interactive "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert StandardOutPath -string "$JB_LOG_DIR/borders.out.log" "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert StandardErrorPath -string "$JB_LOG_DIR/borders.err.log" "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert EnvironmentVariables -dictionary "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert EnvironmentVariables.HOME -string "$JB_USER_HOME" "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert EnvironmentVariables.PATH -string "$jb_service_path" "$JB_TEMP_PLIST"
+  /usr/bin/plutil -insert EnvironmentVariables.LANG -string "$jb_lang" "$JB_TEMP_PLIST"
+
+  if [[ -n "${XDG_CONFIG_HOME:-}" && "$XDG_CONFIG_HOME" == /* ]]; then
+    /usr/bin/plutil -insert EnvironmentVariables.XDG_CONFIG_HOME -string "$XDG_CONFIG_HOME" "$JB_TEMP_PLIST"
+  fi
+
+  /usr/bin/plutil -lint "$JB_TEMP_PLIST" >/dev/null
+  /bin/chmod 0644 "$JB_TEMP_PLIST"
+  /bin/mv -f "$JB_TEMP_PLIST" "$JB_PLIST"
+  JB_TEMP_PLIST=""
+}
+
+jb_wait_for_unloaded() {
+  local jb_attempt=0
+
+  while jb_service_loaded && [[ "$jb_attempt" -lt 50 ]]; do
+    /bin/sleep 0.1
+    jb_attempt=$((jb_attempt + 1))
+  done
+  if jb_service_loaded; then
+    printf 'local-service: LaunchAgent did not unload: %s\n' "$JB_SERVICE_TARGET" >&2
+    return 1
+  fi
+}
+
+jb_wait_for_no_border_processes() {
+  local jb_attempt=0
+  local jb_pids
+
+  jb_pids="$(jb_border_pids)"
+  while [[ -n "$jb_pids" && "$jb_attempt" -lt 50 ]]; do
+    /bin/sleep 0.1
+    jb_attempt=$((jb_attempt + 1))
+    jb_pids="$(jb_border_pids)"
+  done
+  if [[ -n "$jb_pids" ]]; then
+    printf 'local-service: another borders process is still running (PID: %s)\n' "${jb_pids//$'\n'/, }" >&2
+    return 1
+  fi
+}
+
+jb_wait_for_running() {
+  local jb_attempt=0
+  local jb_output=""
+  local jb_pid=""
+  local jb_first_pid=""
+
+  while [[ "$jb_attempt" -lt 50 ]]; do
+    if jb_output="$(/bin/launchctl print "$JB_SERVICE_TARGET" 2>&1)"; then
+      jb_pid="$(printf '%s\n' "$jb_output" | /usr/bin/awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }')"
+    else
+      jb_pid=""
+    fi
+    if [[ "$jb_pid" =~ ^[0-9]+$ ]] && /bin/kill -0 "$jb_pid" 2>/dev/null; then
+      jb_first_pid="$jb_pid"
+      /bin/sleep 1
+      if jb_output="$(/bin/launchctl print "$JB_SERVICE_TARGET" 2>&1)"; then
+        jb_pid="$(printf '%s\n' "$jb_output" | /usr/bin/awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }')"
+      else
+        jb_pid=""
+      fi
+      if [[ "$jb_pid" == "$jb_first_pid" ]] && /bin/kill -0 "$jb_pid" 2>/dev/null; then
+        return 0
+      fi
+    fi
+    /bin/sleep 0.1
+    jb_attempt=$((jb_attempt + 1))
+  done
+
+  printf '%s\n' "$jb_output" >&2
+  if [[ -f "$JB_LOG_DIR/borders.err.log" ]]; then
+    /usr/bin/tail -n 20 "$JB_LOG_DIR/borders.err.log" >&2 || true
+  fi
+  return 1
+}
+
+jb_launchd_pid() {
+  /bin/launchctl print "$JB_SERVICE_TARGET" 2>/dev/null \
+    | /usr/bin/awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }'
+}
+
+jb_validate_process_ownership() {
+  local jb_launchd_pid=""
+  local jb_pid
+  local jb_pids
+
+  jb_pids="$(jb_border_pids)"
+  if jb_service_loaded; then
+    jb_launchd_pid="$(jb_launchd_pid || true)"
+    for jb_pid in $jb_pids; do
+      [[ -n "$jb_launchd_pid" && "$jb_pid" == "$jb_launchd_pid" ]] \
+        || jb_die "an unmanaged borders process is running (PID: $jb_pid)"
+    done
+  elif [[ -n "$jb_pids" ]]; then
+    jb_die "an unmanaged borders process is running (PID: ${jb_pids//$'\n'/, })"
+  fi
+}
+
+jb_preflight_installed_service() {
+  jb_require_no_homebrew_service
+  jb_validate_version_link "$JB_CURRENT_VERSION_LINK"
+  jb_validate_version_link "$JB_PREVIOUS_VERSION_LINK"
+  jb_validate_managed_link "$JB_STABLE_BINARY"
+  jb_validate_managed_link "$JB_STABLE_MANPAGE"
+  jb_validate_managed_plist
+  [[ -L "$JB_CURRENT_VERSION_LINK" ]] || jb_die "current version link is missing: $JB_CURRENT_VERSION_LINK"
+  jb_validate_version_artifact "$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  [[ -x "$JB_STABLE_BINARY" ]] || jb_die "installed binary is missing: $JB_STABLE_BINARY"
+  [[ -f "$JB_PLIST" ]] || jb_die "LaunchAgent is missing: $JB_PLIST"
+  jb_validate_process_ownership
+}
+
+jb_stop_service() {
+  if jb_service_loaded; then
+    /bin/launchctl bootout "$JB_SERVICE_TARGET" || return 1
+    jb_wait_for_unloaded || return 1
+  fi
+}
+
+jb_bootstrap_service() {
+  if ! jb_wait_for_no_border_processes; then
+    return 1
+  fi
+  if ! /bin/launchctl enable "$JB_SERVICE_TARGET"; then
+    return 1
+  fi
+  if ! /bin/launchctl bootstrap "$JB_DOMAIN" "$JB_PLIST"; then
+    return 1
+  fi
+  if ! jb_wait_for_running; then
+    /bin/launchctl bootout "$JB_SERVICE_TARGET" >/dev/null 2>&1 || true
+    jb_wait_for_unloaded
+    return 1
+  fi
+}
+
+jb_restart_service() {
+  jb_preflight_installed_service
+  jb_stop_service || return 1
+  jb_wait_for_no_border_processes || return 1
+  jb_bootstrap_service
+}
+
+jb_install() {
+  local jb_old_current=""
+  local jb_old_previous=""
+  local jb_old_stable_binary=""
+  local jb_old_stable_manpage=""
+
+  /usr/bin/make -C "$JB_SOURCE_ROOT" all
+  jb_require_no_homebrew_service
+  jb_validate_version_link "$JB_CURRENT_VERSION_LINK"
+  jb_validate_version_link "$JB_PREVIOUS_VERSION_LINK"
+  jb_validate_managed_link "$JB_STABLE_BINARY"
+  jb_validate_managed_link "$JB_STABLE_MANPAGE"
+  jb_validate_managed_plist
+  jb_validate_process_ownership
+
+  if jb_service_loaded && [[ ! -L "$JB_CURRENT_VERSION_LINK" ]]; then
+    jb_die "the service is loaded without a managed current-version link"
+  fi
+  if [[ -L "$JB_CURRENT_VERSION_LINK" ]]; then
+    jb_old_current="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  fi
+  if [[ -L "$JB_PREVIOUS_VERSION_LINK" ]]; then
+    jb_old_previous="$(/usr/bin/readlink "$JB_PREVIOUS_VERSION_LINK")"
+  fi
+  if [[ -L "$JB_STABLE_BINARY" ]]; then
+    jb_old_stable_binary="$(/usr/bin/readlink "$JB_STABLE_BINARY")"
+  fi
+  if [[ -L "$JB_STABLE_MANPAGE" ]]; then
+    jb_old_stable_manpage="$(/usr/bin/readlink "$JB_STABLE_MANPAGE")"
+  fi
+  jb_install_version
+  jb_enter_critical_section
+  jb_backup_plist
+  jb_write_plist
+  if ! jb_activate_version "$JB_INSTALLED_VERSION_ROOT"; then
+    jb_restore_install_state "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
+      || jb_die "activation failed and the previous installation state could not be restored"
+    jb_die "activation failed before the running service was stopped; previous state was restored"
+  fi
+
+  if ! jb_stop_service || ! jb_wait_for_no_border_processes; then
+    jb_restore_install_state "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
+      || jb_die "service stop failed and the previous installation state could not be restored"
+    if [[ -n "$jb_old_current" ]] && ! jb_service_loaded && ! jb_bootstrap_service; then
+      jb_die "service stop failed; previous links were restored but the previous service could not restart"
+    fi
+    jb_die "service stop failed; previous links and service state were restored"
+  fi
+
+  if ! jb_bootstrap_service; then
+    if [[ -n "$jb_old_current" ]]; then
+      jb_info "new version failed to start; restoring $jb_old_current"
+      jb_restore_install_state "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
+        || jb_die "the new version failed and the previous installation state could not be restored"
+      if jb_bootstrap_service; then
+        jb_die "the new version failed to start; the previous version was restored and is running"
+      fi
+      jb_die "the new version and restored previous version both failed to start"
+    fi
+
+    jb_restore_install_state "$jb_old_current" "$jb_old_previous" "$jb_old_stable_binary" "$jb_old_stable_manpage" \
+      || jb_die "the first version failed and managed installation state could not be cleaned up"
+    jb_die "the first installed version failed to start; managed entry points were removed"
+  fi
+
+  jb_discard_plist_backup
+  jb_leave_critical_section
+
+  jb_info "installed version $JB_INSTALLED_VERSION"
+  jb_info "binary: $JB_STABLE_BINARY -> $JB_INSTALLED_BINARY"
+  jb_info "service: $JB_SERVICE_TARGET (running)"
+  jb_info "logs: $JB_LOG_DIR"
+}
+
+jb_start() {
+  jb_preflight_installed_service
+  jb_enter_critical_section
+  /bin/launchctl enable "$JB_SERVICE_TARGET" || jb_die "could not enable $JB_SERVICE_TARGET"
+
+  if jb_service_loaded; then
+    if ! /bin/launchctl kickstart -k "$JB_SERVICE_TARGET" || ! jb_wait_for_running; then
+      /bin/launchctl bootout "$JB_SERVICE_TARGET" >/dev/null 2>&1 || true
+      jb_wait_for_unloaded
+      jb_die "LaunchAgent failed to remain running: $JB_SERVICE_TARGET"
+    fi
+  elif ! jb_bootstrap_service; then
+    jb_die "LaunchAgent failed to remain running: $JB_SERVICE_TARGET"
+  fi
+  jb_leave_critical_section
+  jb_info "service is running: $JB_SERVICE_TARGET"
+}
+
+jb_stop() {
+  jb_validate_process_ownership
+  jb_enter_critical_section
+  /bin/launchctl disable "$JB_SERVICE_TARGET" || jb_die "could not disable $JB_SERVICE_TARGET"
+  jb_stop_service || jb_die "the service was disabled but could not be unloaded"
+  jb_leave_critical_section
+  jb_info "service is stopped and disabled until service-start or install-service"
+}
+
+jb_rollback() {
+  local jb_current
+  local jb_previous
+
+  jb_preflight_installed_service
+  [[ -L "$JB_PREVIOUS_VERSION_LINK" ]] || jb_die "no previous installed version is available"
+  jb_current="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  jb_previous="$(/usr/bin/readlink "$JB_PREVIOUS_VERSION_LINK")"
+  jb_validate_version_artifact "$jb_previous"
+  [[ "$jb_current" != "$jb_previous" ]] || jb_die "current and previous both point to $jb_current"
+
+  jb_enter_critical_section
+  if ! jb_atomic_link "$jb_previous" "$JB_CURRENT_VERSION_LINK" \
+    || ! jb_atomic_link "$jb_current" "$JB_PREVIOUS_VERSION_LINK"; then
+    jb_atomic_link "$jb_current" "$JB_CURRENT_VERSION_LINK" || true
+    jb_atomic_link "$jb_previous" "$JB_PREVIOUS_VERSION_LINK" || true
+    jb_die "rollback links could not be switched; the running service was not stopped"
+  fi
+
+  if ! jb_stop_service || ! jb_wait_for_no_border_processes; then
+    jb_atomic_link "$jb_current" "$JB_CURRENT_VERSION_LINK" || jb_die "service stop failed and current could not be restored"
+    jb_atomic_link "$jb_previous" "$JB_PREVIOUS_VERSION_LINK" || jb_die "service stop failed and previous could not be restored"
+    if ! jb_service_loaded && ! jb_bootstrap_service; then
+      jb_die "service stop failed; original links were restored but the original service could not restart"
+    fi
+    jb_die "service stop failed; original links and service state were restored"
+  fi
+
+  if ! jb_bootstrap_service; then
+    jb_info "rollback target failed to start; restoring $jb_current"
+    jb_atomic_link "$jb_current" "$JB_CURRENT_VERSION_LINK"
+    jb_atomic_link "$jb_previous" "$JB_PREVIOUS_VERSION_LINK"
+    if jb_bootstrap_service; then
+      jb_die "rollback failed; the original version was restored and is running"
+    fi
+    jb_die "rollback and recovery both failed to start"
+  fi
+
+  jb_leave_critical_section
+  jb_info "rolled back to $jb_previous"
+  jb_info "service is running: $JB_SERVICE_TARGET"
+}
+
+jb_status() {
+  local jb_target="not installed"
+  local jb_current="not installed"
+  local jb_previous="not available"
+  local jb_output
+  local jb_pid
+
+  if [[ -L "$JB_STABLE_BINARY" ]]; then
+    jb_target="$(/usr/bin/readlink "$JB_STABLE_BINARY")"
+  elif [[ -e "$JB_STABLE_BINARY" ]]; then
+    jb_target="$JB_STABLE_BINARY (unmanaged)"
+  fi
+  if [[ -L "$JB_CURRENT_VERSION_LINK" ]]; then
+    jb_current="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
+  fi
+  if [[ -L "$JB_PREVIOUS_VERSION_LINK" ]]; then
+    jb_previous="$(/usr/bin/readlink "$JB_PREVIOUS_VERSION_LINK")"
+  fi
+
+  printf 'binary: %s -> %s\n' "$JB_STABLE_BINARY" "$jb_target"
+  printf 'current: %s\n' "$jb_current"
+  printf 'previous: %s\n' "$jb_previous"
+  printf 'plist: %s\n' "$JB_PLIST"
+  printf 'logs: %s\n' "$JB_LOG_DIR"
+
+  if ! jb_output="$(/bin/launchctl print "$JB_SERVICE_TARGET" 2>&1)"; then
+    printf 'service: not loaded (%s)\n' "$JB_SERVICE_TARGET"
+    return 1
+  fi
+
+  printf '%s\n' "$jb_output" | /usr/bin/grep -E '^[[:space:]]*(state|path|program|pid|last exit code) =' || true
+  jb_pid="$(printf '%s\n' "$jb_output" | /usr/bin/awk '/^[[:space:]]*pid = [0-9]+/ { print $3; exit }')"
+  [[ "$jb_pid" =~ ^[0-9]+$ ]] && /bin/kill -0 "$jb_pid" 2>/dev/null
+}
+
+jb_uninstall() {
+  jb_validate_version_link "$JB_CURRENT_VERSION_LINK"
+  jb_validate_version_link "$JB_PREVIOUS_VERSION_LINK"
+  jb_validate_managed_link "$JB_STABLE_BINARY"
+  jb_validate_managed_link "$JB_STABLE_MANPAGE"
+  jb_validate_managed_plist
+  jb_validate_process_ownership
+  jb_enter_critical_section
+  /bin/launchctl disable "$JB_SERVICE_TARGET" || jb_die "could not disable $JB_SERVICE_TARGET"
+  jb_stop_service || jb_die "the service was disabled but could not be unloaded"
+  /bin/rm -f "$JB_PLIST"
+  if [[ -L "$JB_STABLE_BINARY" ]]; then
+    /bin/rm "$JB_STABLE_BINARY"
+  fi
+  if [[ -L "$JB_STABLE_MANPAGE" ]]; then
+    /bin/rm "$JB_STABLE_MANPAGE"
+  fi
+  jb_leave_critical_section
+  jb_info "removed the LaunchAgent and managed entry points"
+  jb_info "versioned files remain available under $JB_INSTALL_ROOT"
+}
+
+jb_require_supported_environment
+JB_ACTION="${1:-}"
+
+case "$JB_ACTION" in
+  install|start|stop|restart|rollback|uninstall)
+    jb_acquire_lock
+    ;;
+esac
+
+case "$JB_ACTION" in
+  install)
+    jb_install
+    ;;
+  start)
+    jb_start
+    ;;
+  stop)
+    jb_stop
+    ;;
+  restart)
+    jb_enter_critical_section
+    if ! jb_restart_service; then
+      jb_die "LaunchAgent failed to remain running: $JB_SERVICE_TARGET"
+    fi
+    jb_leave_critical_section
+    jb_info "service is running: $JB_SERVICE_TARGET"
+    ;;
+  rollback)
+    jb_rollback
+    ;;
+  status)
+    jb_status
+    ;;
+  uninstall)
+    jb_uninstall
+    ;;
+  *)
+    jb_usage >&2
+    exit 2
+    ;;
+esac
