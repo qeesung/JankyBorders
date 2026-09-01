@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: macOS 26 build and tests
+    runs-on: macos-26
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show runner environment
+        run: |
+          sw_vers
+          uname -m
+          clang --version
+
+      - name: Build optimized binary
+        run: |
+          make clean
+          make
+
+      - name: Build debug binary
+        run: make debug
+
+      - name: Run unit tests
+        run: make test
