@@ -165,6 +165,51 @@ int main(void) {
   assert(mask == 0);
   assert(settings.border_style == BORDER_STYLE_ROUND_UNIFORM);
 
+  settings.border_width = 4.0f;
+  char valid_width[] = "width=6.5";
+  char* valid_width_arguments[] = { valid_width };
+  mask = parse_settings(&settings, 1, valid_width_arguments);
+  assert(mask == BORDER_UPDATE_MASK_ALL);
+  assert_close(settings.border_width, 6.5f);
+
+  const char* invalid_width_values[] = {
+    "width=", "width=0", "width=-1", "width=nan", "width=inf",
+    "width=4px", "width=1e9999"
+  };
+  for (size_t i = 0;
+       i < sizeof(invalid_width_values) / sizeof(invalid_width_values[0]);
+       ++i) {
+    char* argument[] = { (char*)invalid_width_values[i] };
+    mask = parse_settings(&settings, 1, argument);
+    assert(mask == 0);
+    assert_close(settings.border_width, 6.5f);
+  }
+
+  settings.border_order = BORDER_ORDER_BELOW;
+  char order_above[] = "order=above";
+  char* order_above_arguments[] = { order_above };
+  mask = parse_settings(&settings, 1, order_above_arguments);
+  assert(mask == BORDER_UPDATE_MASK_ALL);
+  assert(settings.border_order == BORDER_ORDER_ABOVE);
+
+  char order_below[] = "order=below";
+  char* order_below_arguments[] = { order_below };
+  mask = parse_settings(&settings, 1, order_below_arguments);
+  assert(mask == BORDER_UPDATE_MASK_ALL);
+  assert(settings.border_order == BORDER_ORDER_BELOW);
+
+  const char* invalid_order_values[] = {
+    "order=a", "order=b", "order=anything", "order=below-trailing"
+  };
+  for (size_t i = 0;
+       i < sizeof(invalid_order_values) / sizeof(invalid_order_values[0]);
+       ++i) {
+    char* argument[] = { (char*)invalid_order_values[i] };
+    mask = parse_settings(&settings, 1, argument);
+    assert(mask == 0);
+    assert(settings.border_order == BORDER_ORDER_BELOW);
+  }
+
   float a, r, g, b;
   colors_mix(0xffff0000, 0xff0000ff, &a, &r, &g, &b);
   assert_close(a, 1.0f);

@@ -3,6 +3,7 @@
 #include "border.h"
 #include "hashtable.h"
 #include <errno.h>
+#include <math.h>
 #include <stdlib.h>
 
 static bool str_starts_with(char* string, char* prefix) {
@@ -27,6 +28,45 @@ static bool parse_u32_argument(const char* argument,
   if (errno != 0 || !end || *end != '\0' || parsed > UINT32_MAX) return false;
   *value = (uint32_t)parsed;
   return true;
+}
+
+static bool parse_width_argument(const char* argument, float* width) {
+  static const char prefix[] = "width=";
+  if (!argument || !width
+      || strncmp(argument, prefix, sizeof(prefix) - 1) != 0) {
+    return false;
+  }
+
+  const char* number = argument + sizeof(prefix) - 1;
+  if (*number == '\0') return false;
+
+  errno = 0;
+  char* end = NULL;
+  float parsed = strtof(number, &end);
+  if (errno == ERANGE
+      || end == number
+      || !end
+      || *end != '\0'
+      || !isfinite(parsed)
+      || parsed <= 0.0f) {
+    return false;
+  }
+
+  *width = parsed;
+  return true;
+}
+
+static bool parse_order_argument(const char* argument, int* order) {
+  if (!argument || !order) return false;
+  if (strcmp(argument, "order=above") == 0) {
+    *order = BORDER_ORDER_ABOVE;
+    return true;
+  }
+  if (strcmp(argument, "order=below") == 0) {
+    *order = BORDER_ORDER_BELOW;
+    return true;
+  }
+  return false;
 }
 
 static bool parse_list(struct table* list, char* token, bool* enabled) {
@@ -271,7 +311,6 @@ static uint32_t parse_settings_internal(struct settings* settings,
   static char blacklist[] = "blacklist=";
   static char whitelist[] = "whitelist=";
 
-  char order = 'a';
   uint32_t update_mask = 0;
   for (int i = 0; i < count; i++) {
     if (!arguments[i]) continue;
@@ -331,12 +370,10 @@ static uint32_t parse_settings_internal(struct settings* settings,
         }
       }
     }
-    else if (sscanf(arguments[i], "width=%f", &settings->border_width) == 1) {
+    else if (parse_width_argument(arguments[i], &settings->border_width)) {
       update_mask |= BORDER_UPDATE_MASK_ALL;
     }
-    else if (sscanf(arguments[i], "order=%c", &order) == 1) {
-      if (order == 'a') settings->border_order = BORDER_ORDER_ABOVE;
-      else settings->border_order = BORDER_ORDER_BELOW;
+    else if (parse_order_argument(arguments[i], &settings->border_order)) {
       update_mask |= BORDER_UPDATE_MASK_ALL;
     }
     else if (str_starts_with(arguments[i], "style=")) {
@@ -377,7 +414,8 @@ static uint32_t parse_settings_internal(struct settings* settings,
     else if (str_starts_with(arguments[i], "apply-to=")) {
       uint32_t apply_to = 0;
       if (global_controls
-          && parse_u32_argument(arguments[i], "apply-to=", &apply_to)) {
+          && parse_u32_argument(arguments[i], "apply-to=", &apply_to)
+          && apply_to > 0) {
         settings->apply_to = apply_to;
         update_mask |= BORDER_UPDATE_MASK_SETTING;
       } else if (global_controls) {
@@ -431,7 +469,8 @@ uint32_t parse_settings_apply_target(int count, char** arguments) {
   for (int i = 0; i < count; ++i) {
     if (!arguments[i]) continue;
     uint32_t candidate = 0;
-    if (parse_u32_argument(arguments[i], "apply-to=", &candidate)) {
+    if (parse_u32_argument(arguments[i], "apply-to=", &candidate)
+        && candidate > 0) {
       apply_to = candidate;
     }
   }
@@ -439,6 +478,24 @@ uint32_t parse_settings_apply_target(int count, char** arguments) {
 }
 
 bool parse_settings_scope_is_valid(int count, char** arguments) {
-  return parse_settings_apply_target(count, arguments) == 0
+  if (count <= 0 || !arguments) return true;
+
+  bool apply_target_present = false;
+  for (int i = 0; i < count; ++i) {
+    if (!arguments[i]
+        || !str_starts_with(arguments[i], "apply-to=")) {
+      continue;
+    }
+
+    uint32_t target = 0;
+    if (apply_target_present
+        || !parse_u32_argument(arguments[i], "apply-to=", &target)
+        || target == 0) {
+      return false;
+    }
+    apply_target_present = true;
+  }
+
+  return !apply_target_present
          || !parse_settings_contains_global_control(count, arguments);
 }

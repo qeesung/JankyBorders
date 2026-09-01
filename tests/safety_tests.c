@@ -282,7 +282,21 @@ static void test_filter_scope(void) {
 
   char* invalid_apply_target[] = { "apply-to=42trailing" };
   assert(parse_settings_apply_target(1, invalid_apply_target) == 0);
-  assert(parse_settings_scope_is_valid(1, invalid_apply_target));
+  assert(!parse_settings_scope_is_valid(1, invalid_apply_target));
+
+  char* malformed_filter_override[] = {
+    "blacklist=Ghostty", "apply-to=42trailing"
+  };
+  assert(!parse_settings_scope_is_valid(2, malformed_filter_override));
+  char* malformed_active_only_override[] = {
+    "active_only=on", "apply-to=42trailing"
+  };
+  assert(!parse_settings_scope_is_valid(2,
+                                        malformed_active_only_override));
+  char* zero_apply_target[] = { "width=7", "apply-to=0" };
+  assert(!parse_settings_scope_is_valid(2, zero_apply_target));
+  char* duplicate_apply_target[] = { "apply-to=41", "apply-to=42" };
+  assert(!parse_settings_scope_is_valid(2, duplicate_apply_target));
 
   struct color_style original = {
     .stype = COLOR_STYLE_SOLID,
