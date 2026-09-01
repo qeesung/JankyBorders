@@ -40,7 +40,7 @@ static bool space_bridge_add_window(NSArray* windows, uint64_t sid) {
     return false;
   }
 
-  id operation = allocated;
+  id operation;
   @try {
     operation = ((id (*)(id, SEL, uint64_t, NSArray*, uint32_t))objc_msgSend)(
         allocated,
@@ -72,7 +72,7 @@ static bool space_bridge_move_managed_window(NSArray* windows, uint64_t sid) {
     return false;
   }
 
-  id operation = allocated;
+  id operation;
   @try {
     operation = ((id (*)(id, SEL, NSArray*, uint64_t))objc_msgSend)(
         allocated,
