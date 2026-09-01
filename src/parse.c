@@ -69,27 +69,6 @@ static bool parse_list(struct table* list, char* token, bool* enabled) {
   return true;
 }
 
-static bool parse_gradient(struct color_style* style,
-                           const char* token,
-                           const char* format,
-                           int direction,
-                           bool glow) {
-  uint32_t color1;
-  uint32_t color2;
-  int consumed = 0;
-  if (sscanf(token, format, &color1, &color2, &consumed) != 2
-      || consumed != (int)strlen(token)) {
-    return false;
-  }
-
-  style->stype = COLOR_STYLE_GRADIENT;
-  style->glow = glow;
-  style->gradient.direction = direction;
-  style->gradient.color1 = color1;
-  style->gradient.color2 = color2;
-  return true;
-}
-
 static int hex_digit_value(char digit) {
   if (digit >= '0' && digit <= '9') return digit - '0';
   if (digit >= 'a' && digit <= 'f') return digit - 'a' + 10;
@@ -117,6 +96,48 @@ static bool parse_hex_color(const char** cursor, uint32_t* color) {
   if (!digits) return false;
 
   *color = value;
+  return true;
+}
+
+static bool consume_literal(const char** cursor, const char* literal) {
+  size_t length = strlen(literal);
+  if (strncmp(*cursor, literal, length) != 0) return false;
+  *cursor += length;
+  return true;
+}
+
+static bool parse_gradient(struct color_style* style,
+                           const char* token,
+                           int direction,
+                           bool glow) {
+  const char* cursor = token;
+  const char* prefix = direction == TL_TO_BR
+                       ? (glow
+                          ? "=glow(gradient(top_left="
+                          : "=gradient(top_left=")
+                       : (glow
+                          ? "=glow(gradient(top_right="
+                          : "=gradient(top_right=");
+  const char* separator = direction == TL_TO_BR
+                          ? ",bottom_right="
+                          : ",bottom_left=";
+  const char* suffix = glow ? "))" : ")";
+
+  uint32_t color1 = 0;
+  uint32_t color2 = 0;
+  if (!consume_literal(&cursor, prefix)
+      || !parse_hex_color(&cursor, &color1)
+      || !consume_literal(&cursor, separator)
+      || !parse_hex_color(&cursor, &color2)
+      || strcmp(cursor, suffix) != 0) {
+    return false;
+  }
+
+  style->stype = COLOR_STYLE_GRADIENT;
+  style->glow = glow;
+  style->gradient.direction = direction;
+  style->gradient.color1 = color1;
+  style->gradient.color2 = color2;
   return true;
 }
 
@@ -189,22 +210,18 @@ static bool parse_color(struct color_style* style,
                         bool allow_per_edge) {
   if (parse_gradient(style,
                      token,
-                     "=glow(gradient(top_left=0x%8x,bottom_right=0x%8x))%n",
                      TL_TO_BR,
                      true)
       || parse_gradient(style,
                         token,
-                        "=glow(gradient(top_right=0x%8x,bottom_left=0x%8x))%n",
                         TR_TO_BL,
                         true)
       || parse_gradient(style,
                         token,
-                        "=gradient(top_left=0x%8x,bottom_right=0x%8x)%n",
                         TL_TO_BR,
                         false)
       || parse_gradient(style,
                         token,
-                        "=gradient(top_right=0x%8x,bottom_left=0x%8x)%n",
                         TR_TO_BL,
                         false)
       || parse_solid(style, token, true, allow_per_edge)

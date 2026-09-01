@@ -122,6 +122,15 @@ int main(void) {
                 &previous_gradient,
                 sizeof(struct color_style)) == 0);
 
+  char invalid_duplicate_prefix[] =
+      "active_color=gradient(top_left=0x0xff,bottom_right=0xff000000)";
+  char* invalid_duplicate_prefix_arguments[] = { invalid_duplicate_prefix };
+  mask = parse_settings(&settings, 1, invalid_duplicate_prefix_arguments);
+  assert(mask == 0);
+  assert(memcmp(&settings.active_window,
+                &previous_gradient,
+                sizeof(struct color_style)) == 0);
+
   struct color_style previous_style = settings.active_window;
   char invalid[] = "active_color=glow(0xff123456)trailing";
   char* invalid_arguments[] = { invalid };
