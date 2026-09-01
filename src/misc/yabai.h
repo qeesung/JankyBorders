@@ -244,7 +244,9 @@ static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* co
 
 static inline void yabai_register_mach_port(struct table* windows) {
   ipc_space_t task = mach_task_self();
-  mach_port_t port;
+  mach_port_t port = MACH_PORT_NULL;
+  CFMachPortRef cf_mach_port = NULL;
+  CFRunLoopSourceRef source = NULL;
   if (mach_port_allocate(task,
                          MACH_PORT_RIGHT_RECEIVE,
                          &port                   ) != KERN_SUCCESS) {
@@ -257,10 +259,15 @@ static inline void yabai_register_mach_port(struct table* windows) {
                                MACH_PORT_LIMITS_INFO,
                                (mach_port_info_t)&limits,
                                MACH_PORT_LIMITS_INFO_COUNT) != KERN_SUCCESS) {
-    return;
+    goto registration_failed;
   }
 
-  if (!mach_register_port(port, "git.felix.jbevent")) return;
+  if (mach_port_insert_right(task,
+                             port,
+                             port,
+                             MACH_MSG_TYPE_MAKE_SEND) != KERN_SUCCESS) {
+    goto registration_failed;
+  }
 
   CFMachPortContext context = {
     .version = 0,
@@ -270,23 +277,28 @@ static inline void yabai_register_mach_port(struct table* windows) {
     .copyDescription = NULL
   };
 
-  CFMachPortRef cf_mach_port = CFMachPortCreateWithPort(NULL,
-                                                        port,
-                                                        yabai_message,
-                                                        &context,
-                                                        false         );
-  if (!cf_mach_port) return;
+  cf_mach_port = CFMachPortCreateWithPort(NULL,
+                                         port,
+                                         yabai_message,
+                                         &context,
+                                         false         );
+  if (!cf_mach_port) goto registration_failed;
 
-  CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL,
-                                                            cf_mach_port,
-                                                            0            );
-  if (!source) {
-    CFRelease(cf_mach_port);
-    return;
+  source = CFMachPortCreateRunLoopSource(NULL, cf_mach_port, 0);
+  if (!source) goto registration_failed;
+
+  if (!mach_register_port(port, "git.felix.jbevent")) {
+    goto registration_failed;
   }
 
   CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopDefaultMode);
   CFRelease(source);
   CFRelease(cf_mach_port);
+  return;
+
+registration_failed:
+  if (source) CFRelease(source);
+  if (cf_mach_port) CFRelease(cf_mach_port);
+  mach_dispose_port(task, &port);
 }
 #endif

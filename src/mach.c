@@ -5,22 +5,31 @@
 #include <string.h>
 #include "mach.h"
 
-mach_port_t mach_get_bs_port(char* bs_name) {
+void mach_dispose_port(ipc_space_t task, mach_port_t* port) {
+  if (!port || *port == MACH_PORT_NULL) return;
+  // A server port owns at most the one send right inserted during setup plus
+  // its receive right. Drop both explicitly; either call may harmlessly fail
+  // when cleanup runs before the corresponding right was created.
+  mach_port_deallocate(task, *port);
+  mach_port_mod_refs(task, *port, MACH_PORT_RIGHT_RECEIVE, -1);
+  *port = MACH_PORT_NULL;
+}
+
+mach_port_t mach_get_bs_port(const char* bs_name) {
+  if (!bs_name || !*bs_name) return MACH_PORT_NULL;
   mach_port_name_t task = mach_task_self();
 
-  mach_port_t bs_port = 0;
+  mach_port_t bs_port = MACH_PORT_NULL;
   if (task_get_special_port(task,
                             TASK_BOOTSTRAP_PORT,
                             &bs_port            ) != KERN_SUCCESS) {
-    return 0;
+    return MACH_PORT_NULL;
   }
 
-  mach_port_t port = 0;
-  if (bootstrap_look_up(bs_port,
-                        bs_name,
-                        &port   ) != KERN_SUCCESS) {
-    return 0;
-  }
+  mach_port_t port = MACH_PORT_NULL;
+  kern_return_t result = bootstrap_look_up(bs_port, bs_name, &port);
+  mach_port_deallocate(task, bs_port);
+  if (result != KERN_SUCCESS) return MACH_PORT_NULL;
 
   return port;
 }
@@ -199,9 +208,15 @@ void mach_message_callback(CFMachPortRef port, void* data, CFIndex size, void* c
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-bool mach_register_port(mach_port_t port, char* name) {
+bool mach_register_port(mach_port_t port, const char* name) {
+  if (port == MACH_PORT_NULL || !name || !*name) return false;
+  size_t name_length = strlen(name);
+  name_t service_name = { 0 };
+  if (name_length >= sizeof(service_name)) return false;
+  memcpy(service_name, name, name_length + 1);
+
   mach_port_name_t task = mach_task_self();
-  mach_port_t bs_port = 0;
+  mach_port_t bs_port = MACH_PORT_NULL;
 
   if (task_get_special_port(task,
                             TASK_BOOTSTRAP_PORT,
@@ -209,17 +224,21 @@ bool mach_register_port(mach_port_t port, char* name) {
     return false;
   }
 
-  if (bootstrap_register(bs_port, name, port) != KERN_SUCCESS) {
-    return false;
-  }
-
-  return true;
+  kern_return_t result = bootstrap_register(bs_port, service_name, port);
+  mach_port_deallocate(task, bs_port);
+  return result == KERN_SUCCESS;
 }
 
 
 bool mach_server_begin(struct mach_server* mach_server, mach_handler handler) {
   if (!mach_server || !handler) return false;
   mach_server->task = mach_task_self();
+  mach_server->port = MACH_PORT_NULL;
+  mach_server->handler = NULL;
+  mach_server->is_running = false;
+
+  CFMachPortRef cf_mach_port = NULL;
+  CFRunLoopSourceRef source = NULL;
 
   if (mach_port_allocate(mach_server->task,
                          MACH_PORT_RIGHT_RECEIVE,
@@ -235,19 +254,15 @@ bool mach_server_begin(struct mach_server* mach_server, mach_handler handler) {
                                MACH_PORT_LIMITS_INFO,
                                (mach_port_info_t)&limits,
                                MACH_PORT_LIMITS_INFO_COUNT) != KERN_SUCCESS) {
-    return false;
+    goto server_failed;
   }
 
   if (mach_port_insert_right(mach_server->task,
                              mach_server->port,
                              mach_server->port,
                              MACH_MSG_TYPE_MAKE_SEND) != KERN_SUCCESS) {
-    return false;
+    goto server_failed;
   }
-
-  if (!mach_register_port(mach_server->port, BS_NAME)) return false;
-
-  mach_server->handler = handler;
 
   CFMachPortContext context = {
     .version = 0,
@@ -257,25 +272,31 @@ bool mach_server_begin(struct mach_server* mach_server, mach_handler handler) {
     .copyDescription = NULL
   };
 
-  CFMachPortRef cf_mach_port = CFMachPortCreateWithPort(NULL,
-                                                        mach_server->port,
-                                                        mach_message_callback,
-                                                        &context,
-                                                        false                );
-  if (!cf_mach_port) return false;
+  cf_mach_port = CFMachPortCreateWithPort(NULL,
+                                         mach_server->port,
+                                         mach_message_callback,
+                                         &context,
+                                         false                );
+  if (!cf_mach_port) goto server_failed;
 
-  CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL,
-                                                            cf_mach_port,
-                                                            0            );
-  if (!source) {
-    CFRelease(cf_mach_port);
-    return false;
-  }
+  source = CFMachPortCreateRunLoopSource(NULL, cf_mach_port, 0);
+  if (!source) goto server_failed;
 
+  // Register only after all fallible local setup has succeeded, so a failure
+  // cannot leave a bootstrap name pointing at a dead receive right.
+  if (!mach_register_port(mach_server->port, BS_NAME)) goto server_failed;
+
+  mach_server->handler = handler;
   CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopDefaultMode);
   mach_server->is_running = true;
   CFRelease(source);
   CFRelease(cf_mach_port);
   return true;
+
+server_failed:
+  if (source) CFRelease(source);
+  if (cf_mach_port) CFRelease(cf_mach_port);
+  mach_dispose_port(mach_server->task, &mach_server->port);
+  return false;
 }
 #pragma clang diagnostic pop

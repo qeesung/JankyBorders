@@ -242,6 +242,24 @@ static void test_invalid_mach_message_cleanup(void) {
                             -1) == KERN_SUCCESS);
 }
 
+static void test_owned_mach_port_cleanup(void) {
+  ipc_space_t task = mach_task_self();
+  mach_port_t port = MACH_PORT_NULL;
+  assert(mach_port_allocate(task,
+                            MACH_PORT_RIGHT_RECEIVE,
+                            &port) == KERN_SUCCESS);
+  assert(mach_port_insert_right(task,
+                                port,
+                                port,
+                                MACH_MSG_TYPE_MAKE_SEND) == KERN_SUCCESS);
+  mach_port_t original_name = port;
+  mach_dispose_port(task, &port);
+  assert(port == MACH_PORT_NULL);
+
+  mach_port_type_t type = 0;
+  assert(mach_port_type(task, original_name, &type) == KERN_INVALID_NAME);
+}
+
 static void test_filter_scope(void) {
   assert(table_init(&g_blacklist, 4, hash_string, compare_string));
   assert(table_init(&g_whitelist, 4, hash_string, compare_string));
@@ -371,6 +389,7 @@ int main(void) {
   test_argument_codec();
   test_outer_mach_validation();
   test_invalid_mach_message_cleanup();
+  test_owned_mach_port_cleanup();
   test_filter_scope();
   test_cfnumber_arrays();
   test_hashtable_fail_closed();

@@ -210,11 +210,10 @@ int main(int argc, char** argv) {
 
   uint32_t update_mask = parse_settings(&g_settings, argc - 1, argv + 1);
   mach_port_t server_port = mach_get_bs_port(BS_NAME);
-  if (server_port && update_mask) {
-    return send_args_to_server(server_port, argc, argv)
-           ? EXIT_SUCCESS
-           : EXIT_FAILURE;
-  } else if (server_port) {
+  if (server_port) {
+    bool sent = update_mask && send_args_to_server(server_port, argc, argv);
+    mach_port_deallocate(mach_task_self(), server_port);
+    if (update_mask) return sent ? EXIT_SUCCESS : EXIT_FAILURE;
     error("A borders instance is already running and no valid arguments"
           " where provided. To modify properties of the running instance"
           " provide them as arguments.\n");

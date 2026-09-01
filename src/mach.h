@@ -20,13 +20,13 @@ struct mach_server {
   bool is_running;
   ipc_space_t task;
   mach_port_t port;
-  mach_port_t bs_port;
 
   mach_handler* handler;
 };
 
-mach_port_t mach_get_bs_port(char* bs_name);
-bool mach_register_port(mach_port_t port, char* name);
+mach_port_t mach_get_bs_port(const char* bs_name);
+bool mach_register_port(mach_port_t port, const char* name);
+void mach_dispose_port(ipc_space_t task, mach_port_t* port);
 bool mach_server_begin(struct mach_server* mach_server, mach_handler handler);
 bool mach_send_message(mach_port_t port, void* message, uint32_t len);
 bool mach_message_get_payload(void* data,
