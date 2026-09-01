@@ -82,6 +82,17 @@ bool mach_message_get_payload(void* data,
   return true;
 }
 
+void mach_destroy_received_message(void* data, size_t received_size) {
+  if (!data || received_size < sizeof(mach_msg_header_t)) return;
+
+  mach_msg_header_t* header = data;
+  if (header->msgh_size < sizeof(mach_msg_header_t)
+      || header->msgh_size > received_size) {
+    return;
+  }
+  mach_msg_destroy(header);
+}
+
 bool mach_encode_arguments(int count,
                            char** arguments,
                            void** payload,
@@ -137,7 +148,12 @@ bool mach_decode_arguments(void* payload,
     char* terminator = memchr(cursor, '\0', (size_t)(end - cursor));
     if (!terminator) return false;
     if (terminator == cursor) {
-      found_end = terminator == end - 1 && argument_count > 0;
+      size_t trailing_size = (size_t)(end - (terminator + 1));
+      // Releases before the bounded codec over-allocated one trailing byte per
+      // argument. Accept exactly that legacy shape, but no arbitrary suffix.
+      found_end = argument_count > 0
+                  && (trailing_size == 0
+                      || trailing_size == argument_count);
       break;
     }
     if (argument_count == INT_MAX) return false;
@@ -170,6 +186,7 @@ void mach_message_callback(CFMachPortRef port, void* data, CFIndex size, void* c
                                 (size_t)size,
                                 &payload,
                                 &payload_size)) {
+    mach_destroy_received_message(data, (size_t)size);
     return;
   }
 
@@ -177,7 +194,7 @@ void mach_message_callback(CFMachPortRef port, void* data, CFIndex size, void* c
   if (mach_server && mach_server->handler) {
     mach_server->handler(payload, payload_size);
   }
-  mach_msg_destroy(&((struct mach_message*)data)->header);
+  mach_destroy_received_message(data, (size_t)size);
 }
 
 #pragma clang diagnostic push

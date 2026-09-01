@@ -33,6 +33,7 @@ bool mach_message_get_payload(void* data,
                               size_t received_size,
                               void** payload,
                               uint32_t* payload_size);
+void mach_destroy_received_message(void* data, size_t received_size);
 bool mach_encode_arguments(int count,
                            char** arguments,
                            void** payload,

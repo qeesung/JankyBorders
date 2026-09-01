@@ -44,15 +44,23 @@ static void test_argument_codec(void) {
   free(payload);
 
   char missing_sentinel[] = { 'x', '\0' };
-  char trailing_data[] = { 'x', '\0', '\0', 'y' };
+  char legacy_one_argument[] = { 'x', '\0', '\0', 'y' };
+  char invalid_trailing_data[] = { 'x', '\0', '\0', 'y', 'z' };
   char missing_nul[] = { 'x', 'y', 'z' };
   char empty[] = { '\0', '\0', '\0' };
   assert(!mach_decode_arguments(missing_sentinel,
                                 sizeof(missing_sentinel),
                                 &decoded,
                                 &count));
-  assert(!mach_decode_arguments(trailing_data,
-                                sizeof(trailing_data),
+  assert(mach_decode_arguments(legacy_one_argument,
+                               sizeof(legacy_one_argument),
+                               &decoded,
+                               &count));
+  assert(count == 1);
+  assert(strcmp(decoded[0], "x") == 0);
+  free(decoded);
+  assert(!mach_decode_arguments(invalid_trailing_data,
+                                sizeof(invalid_trailing_data),
                                 &decoded,
                                 &count));
   assert(!mach_decode_arguments(missing_nul,
@@ -61,6 +69,20 @@ static void test_argument_codec(void) {
                                 &count));
   assert(!mach_decode_arguments(empty, sizeof(empty), &decoded, &count));
   assert(!mach_encode_arguments(0, source, &payload, &payload_size));
+
+  char legacy_two_arguments[] = {
+    'w', 'i', 'd', 't', 'h', '=', '7', '\0',
+    'o', 'r', 'd', 'e', 'r', '=', 'a', 'b', 'o', 'v', 'e', '\0',
+    '\0', (char)0xa5, (char)0x5a
+  };
+  assert(mach_decode_arguments(legacy_two_arguments,
+                               sizeof(legacy_two_arguments),
+                               &decoded,
+                               &count));
+  assert(count == 2);
+  assert(strcmp(decoded[0], "width=7") == 0);
+  assert(strcmp(decoded[1], "order=above") == 0);
+  free(decoded);
 
   unsigned int state = 0x13579bdfU;
   for (size_t length = 0; length < 512; ++length) {
@@ -123,6 +145,101 @@ static void test_outer_mach_validation(void) {
                                 MACH_MESSAGE_MAX_PAYLOAD + 1U,
                                 &oversized_arguments,
                                 &oversized_count));
+}
+
+static void test_invalid_mach_message_cleanup(void) {
+  mach_port_t task = mach_task_self();
+  mach_port_t receive_port = MACH_PORT_NULL;
+  mach_port_t tracked_port = MACH_PORT_NULL;
+  assert(mach_port_allocate(task,
+                            MACH_PORT_RIGHT_RECEIVE,
+                            &receive_port) == KERN_SUCCESS);
+  assert(mach_port_insert_right(task,
+                                receive_port,
+                                receive_port,
+                                MACH_MSG_TYPE_MAKE_SEND) == KERN_SUCCESS);
+  assert(mach_port_allocate(task,
+                            MACH_PORT_RIGHT_RECEIVE,
+                            &tracked_port) == KERN_SUCCESS);
+  assert(mach_port_insert_right(task,
+                                tracked_port,
+                                tracked_port,
+                                MACH_MSG_TYPE_MAKE_SEND) == KERN_SUCCESS);
+
+  mach_port_urefs_t initial_refs = 0;
+  assert(mach_port_get_refs(task,
+                            tracked_port,
+                            MACH_PORT_RIGHT_SEND,
+                            &initial_refs) == KERN_SUCCESS);
+
+  struct invalid_message {
+    mach_msg_header_t header;
+    mach_msg_body_t body;
+    mach_msg_port_descriptor_t descriptors[2];
+  } outgoing = { 0 };
+  outgoing.header.msgh_bits = MACH_MSGH_BITS_COMPLEX
+                              | MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+  outgoing.header.msgh_size = sizeof(outgoing);
+  outgoing.header.msgh_remote_port = receive_port;
+  outgoing.body.msgh_descriptor_count = 2;
+  for (size_t i = 0; i < 2; ++i) {
+    outgoing.descriptors[i].name = tracked_port;
+    outgoing.descriptors[i].disposition = MACH_MSG_TYPE_COPY_SEND;
+    outgoing.descriptors[i].type = MACH_MSG_PORT_DESCRIPTOR;
+  }
+  assert(mach_msg(&outgoing.header,
+                  MACH_SEND_MSG,
+                  sizeof(outgoing),
+                  0,
+                  MACH_PORT_NULL,
+                  MACH_MSG_TIMEOUT_NONE,
+                  MACH_PORT_NULL) == KERN_SUCCESS);
+
+  union {
+    struct invalid_message message;
+    uint8_t storage[sizeof(struct invalid_message)
+                    + sizeof(mach_msg_max_trailer_t)];
+  } incoming = { 0 };
+  assert(mach_msg(&incoming.message.header,
+                  MACH_RCV_MSG,
+                  0,
+                  sizeof(incoming),
+                  receive_port,
+                  MACH_MSG_TIMEOUT_NONE,
+                  MACH_PORT_NULL) == KERN_SUCCESS);
+
+  mach_port_urefs_t received_refs = 0;
+  assert(mach_port_get_refs(task,
+                            tracked_port,
+                            MACH_PORT_RIGHT_SEND,
+                            &received_refs) == KERN_SUCCESS);
+  assert(received_refs == initial_refs + 2);
+
+  void* payload = NULL;
+  uint32_t payload_size = 0;
+  assert(!mach_message_get_payload(&incoming.message,
+                                   incoming.message.header.msgh_size,
+                                   &payload,
+                                   &payload_size));
+  mach_destroy_received_message(&incoming.message,
+                                incoming.message.header.msgh_size);
+
+  mach_port_urefs_t cleaned_refs = 0;
+  assert(mach_port_get_refs(task,
+                            tracked_port,
+                            MACH_PORT_RIGHT_SEND,
+                            &cleaned_refs) == KERN_SUCCESS);
+  assert(cleaned_refs == initial_refs);
+  assert(mach_port_deallocate(task, tracked_port) == KERN_SUCCESS);
+  assert(mach_port_mod_refs(task,
+                            tracked_port,
+                            MACH_PORT_RIGHT_RECEIVE,
+                            -1) == KERN_SUCCESS);
+  assert(mach_port_deallocate(task, receive_port) == KERN_SUCCESS);
+  assert(mach_port_mod_refs(task,
+                            receive_port,
+                            MACH_PORT_RIGHT_RECEIVE,
+                            -1) == KERN_SUCCESS);
 }
 
 static void test_filter_scope(void) {
@@ -220,6 +337,7 @@ static void test_hashtable_fail_closed(void) {
 int main(void) {
   test_argument_codec();
   test_outer_mach_validation();
+  test_invalid_mach_message_cleanup();
   test_filter_scope();
   test_cfnumber_arrays();
   test_hashtable_fail_closed();

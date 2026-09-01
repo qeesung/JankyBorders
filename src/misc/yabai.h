@@ -205,6 +205,7 @@ static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* co
                                 (size_t)size,
                                 &payload_data,
                                 &payload_size)) {
+    mach_destroy_received_message(data, (size_t)size);
     return;
   }
 
@@ -235,7 +236,7 @@ static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* co
       }
     }
   }
-  mach_msg_destroy(&((struct mach_message*)data)->header);
+  mach_destroy_received_message(data, (size_t)size);
 }
 
 static inline void yabai_register_mach_port(struct table* windows) {
