@@ -37,7 +37,10 @@ bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid) {
   pid_t pid = 0;
   SLSConnectionGetPID(wid_cid, &pid);
   static char pid_name_buffer[PROC_PIDPATHINFO_MAXSIZE];
-  proc_name(pid, pid_name_buffer, sizeof(pid_name_buffer));
+  pid_name_buffer[0] = '\0';
+  if (proc_name(pid, pid_name_buffer, sizeof(pid_name_buffer)) <= 0) {
+    return false;
+  }
 
   if (pid == g_pid
       || g_settings.border_style == BORDER_STYLE_NONE
@@ -103,7 +106,8 @@ bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid) {
   return window_created;
 }
 
-static void windows_remove_all(struct table* windows) {
+static bool windows_remove_all(struct table* windows) {
+  if (!windows || !windows->buckets || windows->capacity <= 0) return false;
   for (int i = 0; i < windows->capacity; ++i) {
     struct bucket* bucket = windows->buckets[i];
     while (bucket) {
@@ -114,12 +118,13 @@ static void windows_remove_all(struct table* windows) {
       bucket = bucket->next;
     }
   }
-  table_clear(windows);
+  if (!table_clear(windows)) return false;
   windows_update_notifications(windows);
+  return true;
 }
 
 void windows_recreate_all_borders(struct table* windows) {
-  windows_remove_all(windows);
+  if (!windows_remove_all(windows)) return;
   windows_add_existing_windows(windows);
   windows_determine_and_focus_active_window(windows);
 }

@@ -44,13 +44,20 @@ void table_free(struct table *table) {
 }
 
 bool table_clear(struct table* table) {
-  if (!table) return false;
-  table_hash_func* hash = table->hash;
-  table_compare_func* cmp = table->cmp;
-  int capacity = table->capacity;
+  if (!table || !table->buckets || table->capacity <= 0) return false;
 
-  table_free(table);
-  return table_init(table, capacity, hash, cmp);
+  for (int i = 0; i < table->capacity; ++i) {
+    struct bucket* bucket = table->buckets[i];
+    while (bucket) {
+      struct bucket* next = bucket->next;
+      free(bucket->key);
+      free(bucket);
+      bucket = next;
+    }
+    table->buckets[i] = NULL;
+  }
+  table->count = 0;
+  return true;
 }
 
 struct bucket** table_get_bucket(struct table* table, void* key) {

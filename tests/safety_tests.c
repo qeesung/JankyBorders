@@ -329,7 +329,12 @@ static void test_hashtable_fail_closed(void) {
   assert(_table_add(&table, "two", 4, (void*)true));
   assert(table_find(&table, "one"));
   assert(table_find(&table, "two"));
+  struct bucket** buckets = table.buckets;
+  int capacity = table.capacity;
   assert(table_clear(&table));
+  assert(table.buckets == buckets);
+  assert(table.capacity == capacity);
+  assert(table.count == 0);
   assert(!table_find(&table, "one"));
   table_free(&table);
 }

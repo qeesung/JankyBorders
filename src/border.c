@@ -55,16 +55,16 @@ static bool border_calculate_bounds(struct border* border, CGRect* frame, struct
   return true;
 }
 
-static void border_add_gradient_glow_path(CGContextRef context,
+static bool border_add_gradient_glow_path(CGContextRef context,
                                           CGRect path_rect,
                                           float inset,
                                           float corner_radius,
                                           bool square) {
-  if (square) drawing_add_rect_with_inset(context, path_rect, inset);
-  else drawing_add_rounded_rect(context, path_rect, corner_radius);
+  if (square) return drawing_add_rect_with_inset(context, path_rect, inset);
+  return drawing_add_rounded_rect(context, path_rect, corner_radius);
 }
 
-static void border_draw_gradient_glow(CGContextRef context,
+static bool border_draw_gradient_glow(CGContextRef context,
                                       const struct gradient* gradient,
                                       CGRect path_rect,
                                       float inset,
@@ -76,31 +76,42 @@ static void border_draw_gradient_glow(CGContextRef context,
   CGColorRef glow_color = CGColorCreateGenericRGB(r, g, b, a);
 
   CGContextSaveGState(context);
-  CGContextSetShadowWithColor(context, CGSizeZero, blur_radius, glow_color);
-  CGColorRelease(glow_color);
+  if (glow_color) {
+    CGContextSetShadowWithColor(context, CGSizeZero, blur_radius, glow_color);
+    CGColorRelease(glow_color);
+  }
   CGContextSetRGBFillColor(context, 1.0f, 1.0f, 1.0f, 1.0f);
   CGContextSetRGBStrokeColor(context, 1.0f, 1.0f, 1.0f, 1.0f);
-  border_add_gradient_glow_path(context,
-                                path_rect,
-                                inset,
-                                corner_radius,
-                                square       );
+  if (!border_add_gradient_glow_path(context,
+                                     path_rect,
+                                     inset,
+                                     corner_radius,
+                                     square       )) {
+    CGContextRestoreGState(context);
+    return false;
+  }
   if (square) CGContextFillPath(context);
   else CGContextStrokePath(context);
 
   CGContextSetShadowWithColor(context, CGSizeZero, 0, NULL);
   CGContextSetBlendMode(context, kCGBlendModeDestinationOut);
-  border_add_gradient_glow_path(context,
-                                path_rect,
-                                inset,
-                                corner_radius,
-                                square       );
+  if (!border_add_gradient_glow_path(context,
+                                     path_rect,
+                                     inset,
+                                     corner_radius,
+                                     square       )) {
+    CGContextRestoreGState(context);
+    return false;
+  }
   if (square) CGContextFillPath(context);
   else CGContextStrokePath(context);
   CGContextRestoreGState(context);
+  return true;
 }
 
-static void border_draw(struct border* border, CGRect frame, struct settings* settings) {
+static bool border_draw(struct border* border,
+                        CGRect frame,
+                        struct settings* settings) {
   CGContextSaveGState(border->context);
   border->needs_redraw = false;
   struct color_style color_style = border->focused
@@ -111,6 +122,7 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
                            : NULL;
 
   CGGradientRef gradient = NULL;
+  CGMutablePathRef inner_clip_path = NULL;
   CGPoint gradient_dir[2];
   if (color_style.stype == COLOR_STYLE_GRADIENT) {
     CGAffineTransform trans = CGAffineTransformMakeScale(frame.size.width,
@@ -135,12 +147,9 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
   CGContextClearRect(border->context, frame);
 
   CGRect path_rect = border->drawing_bounds;
-  CGMutablePathRef inner_clip_path = CGPathCreateMutable();
+  inner_clip_path = CGPathCreateMutable();
   if (!inner_clip_path) {
-    border->needs_redraw = true;
-    if (gradient) CGGradientRelease(gradient);
-    CGContextRestoreGState(border->context);
-    return;
+    goto draw_failed;
   }
   bool square_thick_above = settings->border_style == BORDER_STYLE_SQUARE
                             && settings->border_order == BORDER_ORDER_ABOVE
@@ -160,7 +169,11 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
                          border->inner_radius,
                          border->inner_radius             );
   }
-  drawing_clip_between_rect_and_path(border->context, frame, inner_clip_path);
+  if (!drawing_clip_between_rect_and_path(border->context,
+                                          frame,
+                                          inner_clip_path)) {
+    goto draw_failed;
+  }
 
   bool square = settings->border_style == BORDER_STYLE_SQUARE;
   float inset = -settings->border_width / 2.f;
@@ -169,58 +182,67 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
                         : border->radius;
 
   if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM) {
-    drawing_draw_rounded_rect_with_inset(border->context,
-                                         path_rect,
-                                         corner_radius,
-                                         true,
-                                         colors,
-                                         color_style.glow);
+    if (!drawing_draw_rounded_rect_with_inset(border->context,
+                                              path_rect,
+                                              corner_radius,
+                                              true,
+                                              colors,
+                                              color_style.glow)) {
+      goto draw_failed;
+    }
   }
 
   if (color_style.stype == COLOR_STYLE_SOLID) {
     if (square) {
-      drawing_draw_square_with_inset(border->context,
-                                     path_rect,
-                                     inset,
-                                     colors,
-                                     color_style.glow);
+      if (!drawing_draw_square_with_inset(border->context,
+                                          path_rect,
+                                          inset,
+                                          colors,
+                                          color_style.glow)) {
+        goto draw_failed;
+      }
     } else {
-      drawing_draw_rounded_rect_with_inset(border->context,
-                                           path_rect,
-                                           corner_radius,
-                                           false,
-                                           colors,
-                                           color_style.glow);
+      if (!drawing_draw_rounded_rect_with_inset(border->context,
+                                                path_rect,
+                                                corner_radius,
+                                                false,
+                                                colors,
+                                                color_style.glow)) {
+        goto draw_failed;
+      }
     }
   } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
     if (color_style.glow) {
       float blur_radius = square_thick_above ? BORDER_TSMN : 10.0f;
-      border_draw_gradient_glow(border->context,
-                                &color_style.gradient,
-                                path_rect,
-                                inset,
-                                corner_radius,
-                                blur_radius,
-                                square               );
+      if (!border_draw_gradient_glow(border->context,
+                                     &color_style.gradient,
+                                     path_rect,
+                                     inset,
+                                     corner_radius,
+                                     blur_radius,
+                                     square               )) {
+        goto draw_failed;
+      }
     }
 
     CGContextSaveGState(border->context);
+    bool drew_gradient = false;
     if (square) {
-      drawing_draw_square_gradient_with_inset(border->context,
-                                              gradient,
-                                              gradient_dir,
-                                              path_rect,
-                                              inset       );
+      drew_gradient = drawing_draw_square_gradient_with_inset(border->context,
+                                                              gradient,
+                                                              gradient_dir,
+                                                              path_rect,
+                                                              inset       );
     } else {
-      drawing_draw_rounded_gradient_with_inset(border->context,
-                                               gradient,
-                                               gradient_dir,
-                                               path_rect,
-                                               corner_radius  );
+      drew_gradient = drawing_draw_rounded_gradient_with_inset(border->context,
+                                                               gradient,
+                                                               gradient_dir,
+                                                               path_rect,
+                                                               corner_radius  );
     }
     CGContextRestoreGState(border->context);
+    if (!drew_gradient) goto draw_failed;
   }
-  if (gradient) CGGradientRelease(gradient);
 
   if (settings->show_background && settings->border_order != 1) {
     CGContextRestoreGState(border->context);
@@ -233,10 +255,20 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     }
   }
   CFRelease(inner_clip_path);
+  if (gradient) CGGradientRelease(gradient);
   CGContextFlush(border->context);
   CGContextRestoreGState(border->context);
   SLSFlushWindowContentRegion(border->cid, border->wid, NULL);
   SLSWindowThaw(border->cid, border->wid);
+  return true;
+
+draw_failed:
+  border->needs_redraw = true;
+  if (inner_clip_path) CFRelease(inner_clip_path);
+  if (gradient) CGGradientRelease(gradient);
+  CGContextRestoreGState(border->context);
+  SLSWindowThaw(border->cid, border->wid);
+  return false;
 }
 
 void border_create_window(struct border* border, CGRect frame, bool unmanaged, bool hidpi) {
@@ -298,30 +330,45 @@ void border_update_internal(struct border* border, struct settings* settings) {
     if (!border->wid || !border->context) return;
   }
 
-  bool disabled_update = false;
+  bool updates_disabled = false;
+  bool window_frozen = false;
   if (!CGRectEqualToRect(frame, border->frame)) {
-    disabled_update = true;
-    SLSDisableUpdate(cid);
+    if (SLSDisableUpdate(cid) != kCGErrorSuccess) return;
+    updates_disabled = true;
 
     CFTypeRef frame_region = NULL;
     if (CGSNewRegionWithRect(&frame, &frame_region) != kCGErrorSuccess
         || !frame_region) {
-      SLSReenableUpdate(cid);
-      return;
+      goto update_cleanup;
     }
 
-    SLSWindowFreezeWithOptions(border->cid, border->wid, NULL);
-    SLSSetWindowShape(border->cid, border->wid, border->origin.x, border->origin.y, frame_region);
+    if (SLSWindowFreezeWithOptions(border->cid,
+                                   border->wid,
+                                   NULL) != kCGErrorSuccess) {
+      CFRelease(frame_region);
+      goto update_cleanup;
+    }
+    window_frozen = true;
+    CGError shape_error = SLSSetWindowShape(border->cid,
+                                            border->wid,
+                                            border->origin.x,
+                                            border->origin.y,
+                                            frame_region);
     CFRelease(frame_region);
+    if (shape_error != kCGErrorSuccess) goto update_cleanup;
 
     border->needs_redraw = true;
     border->frame = frame;
   }
 
-  if (border->needs_redraw) border_draw(border, frame, settings);
+  if (border->needs_redraw) {
+    bool draw_succeeded = border_draw(border, frame, settings);
+    window_frozen = false;
+    if (!draw_succeeded) goto update_cleanup;
+  }
 
   CFTypeRef transaction = SLSTransactionCreate(cid);
-  if(!transaction) return;
+  if (!transaction) goto update_cleanup;
   SLSTransactionMoveWindowWithGroup(transaction, border->wid, border->origin);
 
   if (!border->is_proxy) {
@@ -340,8 +387,9 @@ void border_update_internal(struct border* border, struct settings* settings) {
                             border->wid,
                             settings->border_order,
                             border->target_wid      );
-  SLSTransactionCommit(transaction, 0);
+  CGError transaction_error = SLSTransactionCommit(transaction, 0);
   CFRelease(transaction);
+  if (transaction_error != kCGErrorSuccess) goto update_cleanup;
 
   uint64_t set_tags = (1ULL << 1) | (1ULL << 9);
   uint64_t clear_tags = 0;
@@ -354,20 +402,9 @@ void border_update_internal(struct border* border, struct settings* settings) {
   SLSSetWindowTags(cid, border->wid, &set_tags, 0x40);
   SLSClearWindowTags(cid, border->wid, &clear_tags, 0x40);
 
-  if (disabled_update) SLSReenableUpdate(cid);
-}
-
-static void* border_update_async_proc(void* context) {
-  struct {
-    struct border* border;
-    struct settings settings;
-  }* payload = context;
-
-  pthread_mutex_lock(&payload->border->mutex);
-  border_update_internal(payload->border, &payload->settings);
-  pthread_mutex_unlock(&payload->border->mutex);
-  free(payload);
-  return NULL;
+update_cleanup:
+  if (window_frozen) SLSWindowThaw(cid, border->wid);
+  if (updates_disabled) SLSReenableUpdate(cid);
 }
 
 void border_init(struct border* border, int cid) {
@@ -413,56 +450,34 @@ void border_move(struct border* border) {
     pthread_mutex_unlock(&border->mutex);
     return;
   }
-  pthread_mutex_unlock(&border->mutex);
-
   struct settings* settings = border_get_settings(border);
-  dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-    pthread_mutex_lock(&border->mutex);
-    CGRect window_frame;
-    SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
-    CGPoint origin = { .x = window_frame.origin.x
-                            - settings->border_width
-                            - BORDER_PADDING,
-                       .y = window_frame.origin.y
-                            - settings->border_width
-                            - BORDER_PADDING          };
+  CGRect window_frame;
+  SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
+  CGPoint origin = { .x = window_frame.origin.x
+                          - settings->border_width
+                          - BORDER_PADDING,
+                     .y = window_frame.origin.y
+                          - settings->border_width
+                          - BORDER_PADDING          };
 
-    CFTypeRef transaction = SLSTransactionCreate(border->cid);
-    if (transaction) {
-      SLSTransactionMoveWindowWithGroup(transaction, border->wid, origin);
-      SLSTransactionCommit(transaction, 0);
-      CFRelease(transaction);
-    }
-    border->target_bounds = window_frame;
-    border->origin = origin;
-    pthread_mutex_unlock(&border->mutex);
-  });
+  CFTypeRef transaction = border->wid
+                          ? SLSTransactionCreate(border->cid)
+                          : NULL;
+  if (transaction) {
+    SLSTransactionMoveWindowWithGroup(transaction, border->wid, origin);
+    SLSTransactionCommit(transaction, 0);
+    CFRelease(transaction);
+  }
+  border->target_bounds = window_frame;
+  border->origin = origin;
+  pthread_mutex_unlock(&border->mutex);
 }
 
 void border_update(struct border* border, bool try_async) {
+  (void)try_async;
   pthread_mutex_lock(&border->mutex);
   struct settings* settings = border_get_settings(border);
   border_update_internal(border, settings);
-  pthread_mutex_unlock(&border->mutex);
-  return;
-
-  if (!border->wid || !try_async) {
-    border_update_internal(border, settings);
-    pthread_mutex_unlock(&border->mutex);
-    return;
-  }
-
-  struct payload {
-    struct border* border;
-    struct settings settings;
-  }* payload = malloc(sizeof(struct payload));
-
-  payload->border = border;
-  payload->settings = *settings;
-
-  pthread_t thread;
-  pthread_create(&thread, NULL, border_update_async_proc, payload);
-  pthread_detach(thread);
   pthread_mutex_unlock(&border->mutex);
 }
 
