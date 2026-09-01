@@ -298,6 +298,26 @@ static void test_filter_scope(void) {
   assert(parse_settings_override(&local_override, 1, active_only_update) == 0);
   assert(!local_override.active_only);
 
+  char* adaptive_active[] = { "adaptive_color=active" };
+  mask = parse_settings(&settings, 1, adaptive_active);
+  assert(mask == BORDER_UPDATE_MASK_ADAPTIVE);
+  assert(settings.adaptive_color == ADAPTIVE_COLOR_MODE_ACTIVE);
+
+  char* adaptive_off[] = { "adaptive_color=off" };
+  mask = parse_settings(&settings, 1, adaptive_off);
+  assert(mask == BORDER_UPDATE_MASK_ADAPTIVE);
+  assert(settings.adaptive_color == ADAPTIVE_COLOR_MODE_OFF);
+
+  char* invalid_adaptive[] = { "adaptive_color=automatic" };
+  assert(parse_settings(&settings, 1, invalid_adaptive) == 0);
+  assert(settings.adaptive_color == ADAPTIVE_COLOR_MODE_OFF);
+
+  char* adaptive_override[] = { "adaptive_color=active", "apply-to=42" };
+  assert(parse_settings_contains_global_control(2, adaptive_override));
+  assert(!parse_settings_scope_is_valid(2, adaptive_override));
+  assert(parse_settings_override(&local_override, 1, adaptive_active) == 0);
+  assert(local_override.adaptive_color == ADAPTIVE_COLOR_MODE_OFF);
+
   char* invalid_apply_target[] = { "apply-to=42trailing" };
   assert(parse_settings_apply_target(1, invalid_apply_target) == 0);
   assert(!parse_settings_scope_is_valid(1, invalid_apply_target));

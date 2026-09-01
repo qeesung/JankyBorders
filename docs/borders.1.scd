@@ -40,6 +40,18 @@ verification boundary.
 	Sets the border color for the focused window (format: _0xAARRGGBB_). For
 	instance, active_color=0xff00ff00 creates a green border.
 
+*adaptive_color=<mode>*
+	Controls automatic contrast colors for the focused window. The default
+	_off_ preserves _active_color_. _active_ samples pixels just inside each
+	window edge and independently selects a black or white top, right, bottom,
+	and left border. Inactive windows continue to use _inactive_color_.
+
+	Sampling is event-driven after focus, window creation or unhide, resize, and
+	the final Space-recovery attempt. Scrolling and video playback alone do not
+	trigger a new sample. If permission is unavailable, capture fails, or an
+	edge has insufficient valid pixels, that edge falls back to _active_color_.
+	This process-wide setting cannot be combined with _apply-to=<window-id>_.
+
 *inactive_color=<color>*
 	Sets the border color for all windows not in focus.
 
@@ -79,8 +91,8 @@ verification boundary.
 	without starting a border instance or requesting Accessibility permission.
 
 *--request-screen-capture*
-	Explicitly asks macOS for the screen-recording permission needed by features
-	that sample window contents. This utility exits without starting a border
+	Explicitly asks macOS for the screen-recording permission used by
+	_adaptive_color=active_. This utility exits without starting a border
 	instance or requesting Accessibility permission. After granting access in
 	System Settings, restart a running local service with
 	_make service-restart_. The LaunchAgent never invokes this option at login.
@@ -103,6 +115,9 @@ $HOME/.config/borders/bordersrc, or the legacy $HOME/.bordersrc path.
 
 *<boolean>*
 	Either _on_ or _off_.
+
+*<mode>*
+	For _adaptive_color_, either _off_ (the default) or _active_.
 
 *<style>*
 	Either _round_, _square_, _uniform_, or _none_. The _none_ style disables

@@ -416,6 +416,18 @@ static uint32_t parse_settings_internal(struct settings* settings,
         update_mask |= BORDER_UPDATE_MASK_RECREATE_ALL;
       }
     }
+    else if (strcmp(arguments[i], "adaptive_color=active") == 0) {
+      if (global_controls) {
+        settings->adaptive_color = ADAPTIVE_COLOR_MODE_ACTIVE;
+        update_mask |= BORDER_UPDATE_MASK_ADAPTIVE;
+      }
+    }
+    else if (strcmp(arguments[i], "adaptive_color=off") == 0) {
+      if (global_controls) {
+        settings->adaptive_color = ADAPTIVE_COLOR_MODE_OFF;
+        update_mask |= BORDER_UPDATE_MASK_ADAPTIVE;
+      }
+    }
     else if (str_starts_with(arguments[i], "apply-to=")) {
       uint32_t apply_to = 0;
       if (global_controls
@@ -464,6 +476,8 @@ bool parse_settings_contains_global_control(int count, char** arguments) {
   for (int i = 0; i < count; ++i) {
     bool enabled = false;
     if (active_only_parse_argument(arguments[i], &enabled)) return true;
+    if (arguments[i]
+        && str_starts_with(arguments[i], "adaptive_color=")) return true;
   }
   return false;
 }

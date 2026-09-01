@@ -8,6 +8,7 @@
 
 #define BORDER_UPDATE_MASK_RECREATE_ALL (1 << 2)
 #define BORDER_UPDATE_MASK_SETTING  (1 << 3)
+#define BORDER_UPDATE_MASK_ADAPTIVE (1 << 4)
 
 
 uint32_t parse_settings(struct settings* settings, int count, char** arguments);

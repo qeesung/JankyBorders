@@ -53,6 +53,21 @@ Sets the border color for the focused window (format: \fI0xAARRGGBB\fR).\& For
 instance, active_color=0xff00ff00 creates a green border.\&
 .PP
 .RE
+\fBadaptive_color=<mode>\fR
+.RS 4
+Controls automatic contrast colors for the focused window.\& The default
+\fIoff\fR preserves \fIactive_color\fR.\& \fIactive\fR samples pixels just inside each
+window edge and independently selects a black or white top, right, bottom,
+and left border.\& Inactive windows continue to use \fIinactive_color\fR.\&
+.PP
+Sampling is event-driven after focus, window creation or unhide, resize, and
+the final Space-recovery attempt.\& Scrolling and video playback alone do not
+trigger a new sample.\& If permission is unavailable, capture fails, or an
+edge has insufficient valid pixels, that edge falls back to
+\fIactive_color\fR.\&
+This process-wide setting cannot be combined with \fIapply-to=<window-id>\fR.\&
+.PP
+.RE
 \fBinactive_color=<color>\fR
 .RS 4
 Sets the border color for all windows not in focus.\&
@@ -111,8 +126,8 @@ without starting a border instance or requesting Accessibility permission.\&
 .RE
 \fB--request-screen-capture\fR
 .RS 4
-Explicitly asks macOS for the screen-recording permission needed by features
-that sample window contents.\& This utility exits without starting a border
+Explicitly asks macOS for the screen-recording permission used by
+\fIadaptive_color=active\fR.\& This utility exits without starting a border
 instance or requesting Accessibility permission.\& After granting access in
 System Settings, restart a running local service with
 \fImake service-restart\fR.\& The LaunchAgent never invokes this option at login.\&
@@ -139,6 +154,11 @@ A floating point number.\&
 \fB<boolean>\fR
 .RS 4
 Either \fIon\fR or \fIoff\fR.\&
+.PP
+.RE
+\fB<mode>\fR
+.RS 4
+For \fIadaptive_color\fR, either \fIoff\fR (the default) or \fIactive\fR.\&
 .PP
 .RE
 \fB<style>\fR

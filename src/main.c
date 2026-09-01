@@ -56,7 +56,8 @@ struct settings g_settings = { .enabled = true,
                                .show_background = false,
                                .border_order = BORDER_ORDER_BELOW,
                                .ax_focus = false,
-                               .active_only = false                          };
+                               .active_only = false,
+                               .adaptive_color = ADAPTIVE_COLOR_MODE_OFF     };
 
 bool g_blacklist_enabled = false;
 struct table g_blacklist;
@@ -97,6 +98,7 @@ static void message_handler(void* data, uint32_t len) {
   }
 
   uint32_t update_mask = 0;
+  enum adaptive_color_mode previous_adaptive_mode = g_settings.adaptive_color;
   struct settings settings = g_settings;
   update_mask = parse_settings(&settings, argument_count, arguments);
 
@@ -137,6 +139,12 @@ static void message_handler(void* data, uint32_t len) {
   }
 
   free(arguments);
+
+  if (update_mask & BORDER_UPDATE_MASK_ADAPTIVE) {
+    windows_adaptive_mode_changed(&g_windows,
+                                  previous_adaptive_mode,
+                                  g_settings.adaptive_color);
+  }
 
   if (update_mask & BORDER_UPDATE_MASK_RECREATE_ALL) {
     windows_recreate_all_borders(&g_windows);

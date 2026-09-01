@@ -6,6 +6,7 @@
 #include "geometry.h"
 #include "space_recovery.h"
 #include "animation.h"
+#include "adaptive_color.h"
 #include "hashtable.h"
 
 #define BORDER_ORDER_ABOVE 1
@@ -23,6 +24,11 @@ struct color_style {
     uint32_t colors[BORDER_SIDE_COUNT];
     struct gradient gradient;
   };
+};
+
+enum adaptive_color_mode {
+  ADAPTIVE_COLOR_MODE_OFF = 0,
+  ADAPTIVE_COLOR_MODE_ACTIVE,
 };
 
 struct settings {
@@ -43,6 +49,7 @@ struct settings {
   int border_order;
   bool ax_focus;
   bool active_only;
+  enum adaptive_color_mode adaptive_color;
 };
 
 // Application filters have process-wide scope. Keep their owning tables out of
@@ -92,6 +99,12 @@ struct border {
   struct border* proxy;
   volatile uint32_t external_proxy_wid;
 
+  // Adaptive captures never retain a border pointer. The process-wide
+  // generation lets their main-queue callbacks reject destroyed or reused
+  // WindowServer IDs before touching this cache.
+  uint64_t adaptive_generation;
+  struct adaptive_color_cache adaptive_color_cache;
+
   struct settings setting_override;
 };
 
@@ -104,5 +117,8 @@ void border_retry_space_migration(struct border* border);
 void border_update(struct border* border, bool try_async);
 void border_hide(struct border* border);
 void border_unhide(struct border* border);
+void border_adaptive_fallback_colors(
+    struct border* border,
+    uint32_t colors[ADAPTIVE_COLOR_SIDE_COUNT]);
 
 struct settings* border_get_settings(struct border* border);

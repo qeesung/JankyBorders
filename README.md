@@ -156,11 +156,46 @@ options=(
 	width=6.0
 	hidpi=off
 	active_only=off
+	adaptive_color=off
 	active_color=0xffe2e2e3
 	inactive_color=0xff414550
 )
 
 borders "${options[@]}"
+```
+
+#### Adapting the focused border to window-edge colors
+
+Adaptive color is disabled by default. Enable it process-wide with:
+
+```bash
+borders adaptive_color=active
+```
+
+For the focused window, JankyBorders samples pixels just inside each window
+edge and independently chooses a black or white top, right, bottom, and left
+border for contrast. Inactive borders continue to use `inactive_color`.
+`adaptive_color` is a process-wide setting and cannot be combined with
+`apply-to=<window-id>`.
+
+Sampling is event-driven: it runs after focus, window creation or unhide,
+resize, and the final Space-recovery attempt. It intentionally does not capture
+continuously, so scrolling and video playback alone do not update the border.
+If permission is unavailable, capture fails, or an edge has insufficient valid
+pixels, that edge falls back to `active_color`.
+
+Adaptive sampling requires macOS screen-recording permission. The user service
+never opens the permission prompt at login. Check or request permission
+explicitly after `make install-service`, then restart the service after
+granting it in System Settings. These Make targets deliberately execute the
+installed, stably signed app through LaunchServices rather than running the
+unsigned build output, so the permission belongs to the same identity used by
+the LaunchAgent:
+
+```bash
+make screen-capture-status
+make request-screen-capture
+make service-restart
 ```
 
 #### Updating the border properties during runtime

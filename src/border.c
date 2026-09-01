@@ -7,11 +7,56 @@
 
 extern struct settings g_settings;
 
+static uint32_t border_interpolate_color(uint32_t first,
+                                         uint32_t second,
+                                         unsigned int numerator) {
+  const unsigned int denominator = 4;
+  uint32_t result = 0;
+  for (unsigned int shift = 0; shift < 32; shift += 8) {
+    unsigned int a = (first >> shift) & 0xffu;
+    unsigned int b = (second >> shift) & 0xffu;
+    unsigned int value = (a * (denominator - numerator)
+                          + b * numerator
+                          + denominator / 2u) / denominator;
+    result |= value << shift;
+  }
+  return result;
+}
+
 struct settings* border_get_settings(struct border* border) {
   assert(pthread_main_np() != 0);
   return border->setting_override.enabled
          ? &border->setting_override
          : &g_settings;
+}
+
+void border_adaptive_fallback_colors(
+    struct border* border,
+    uint32_t colors[ADAPTIVE_COLOR_SIDE_COUNT]) {
+  if (!border || !colors) return;
+  struct color_style* style = &border_get_settings(border)->active_window;
+  if (style->stype == COLOR_STYLE_SOLID) {
+    memcpy(colors, style->colors, sizeof(style->colors));
+    return;
+  }
+
+  unsigned int amounts[ADAPTIVE_COLOR_SIDE_COUNT];
+  if (style->gradient.direction == TL_TO_BR) {
+    amounts[ADAPTIVE_COLOR_SIDE_TOP] = 1;
+    amounts[ADAPTIVE_COLOR_SIDE_RIGHT] = 3;
+    amounts[ADAPTIVE_COLOR_SIDE_BOTTOM] = 3;
+    amounts[ADAPTIVE_COLOR_SIDE_LEFT] = 1;
+  } else {
+    amounts[ADAPTIVE_COLOR_SIDE_TOP] = 1;
+    amounts[ADAPTIVE_COLOR_SIDE_RIGHT] = 1;
+    amounts[ADAPTIVE_COLOR_SIDE_BOTTOM] = 3;
+    amounts[ADAPTIVE_COLOR_SIDE_LEFT] = 3;
+  }
+  for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+    colors[side] = border_interpolate_color(style->gradient.color1,
+                                             style->gradient.color2,
+                                             amounts[side]);
+  }
 }
 
 static void border_destroy_window(struct border* border) {
@@ -217,6 +262,21 @@ static bool border_draw(struct border* border,
   struct color_style color_style = border->focused
                                    ? settings->active_window
                                    : settings->inactive_window;
+  if (border->focused
+      && g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_ACTIVE
+      && border->adaptive_color_cache.valid_mask) {
+    uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT];
+    border_adaptive_fallback_colors(border, fallback);
+    color_style.stype = COLOR_STYLE_SOLID;
+    color_style.glow = false;
+    for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+      uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
+      color_style.colors[side] = border->adaptive_color_cache.valid_mask
+                                 & side_mask
+                                 ? border->adaptive_color_cache.colors[side]
+                                 : fallback[side];
+    }
+  }
   const uint32_t* colors = color_style.stype == COLOR_STYLE_SOLID
                            ? color_style.colors
                            : NULL;

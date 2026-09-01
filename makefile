@@ -1,6 +1,6 @@
-FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c src/screen_capture.c src/space_bridge.m
+FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c src/screen_capture.c src/adaptive_color.c src/edge_sampler.m src/space_bridge.m
 HEADERS = $(wildcard src/*.h src/misc/*.h)
-LIBS = -framework AppKit -framework CoreVideo -F/System/Library/PrivateFrameworks/ -framework SkyLight
+LIBS = -framework AppKit -framework CoreVideo -framework ScreenCaptureKit -F/System/Library/PrivateFrameworks/ -framework SkyLight
 SAFETY_TEST_FILES = tests/safety_tests.c src/parse.c src/mach.c src/hashtable.c
 SANITIZER_FLAGS = -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 THREAD_SANITIZER_FLAGS = -fsanitize=thread -fno-omit-frame-pointer
@@ -41,6 +41,10 @@ test: | bin
 	./bin/space_recovery_test
 	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test -framework CoreVideo
 	./bin/animation_lifecycle_test
+	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/adaptive_color_test.c src/adaptive_color.c -o bin/adaptive_color_test
+	./bin/adaptive_color_test
+	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/adaptive_lifecycle_test.c -o bin/adaptive_lifecycle_test
+	./bin/adaptive_lifecycle_test
 
 test-sanitize: | bin
 	clang -std=c99 -Wall -Wextra -O1 -g $(SANITIZER_FLAGS) -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)
@@ -61,10 +65,16 @@ test-sanitize: | bin
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/space_recovery_test_sanitize
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test_sanitize -framework CoreVideo
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/animation_lifecycle_test_sanitize
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/adaptive_color_test.c src/adaptive_color.c -o bin/adaptive_color_test_sanitize
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/adaptive_color_test_sanitize
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/adaptive_lifecycle_test.c -o bin/adaptive_lifecycle_test_sanitize
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/adaptive_lifecycle_test_sanitize
 
 test-thread: | bin
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(THREAD_SANITIZER_FLAGS) tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test_tsan -framework CoreVideo
 	TSAN_OPTIONS=halt_on_error=1 ./bin/animation_lifecycle_test_tsan
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(THREAD_SANITIZER_FLAGS) tests/adaptive_lifecycle_test.c -o bin/adaptive_lifecycle_test_tsan
+	TSAN_OPTIONS=halt_on_error=1 ./bin/adaptive_lifecycle_test_tsan
 
 install-service update-service:
 	@/bin/bash scripts/local-service install

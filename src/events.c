@@ -84,7 +84,7 @@ static void window_modify_handler(uint32_t event,
     windows_window_move(windows, wid);
   } else if (event == EVENT_WINDOW_RESIZE) {
     debug("Window Resize: %d\n", wid);
-    windows_window_update(windows, wid);
+    windows_window_resize(windows, wid);
   } else if (event == EVENT_WINDOW_REORDER) {
     debug("Window Reorder (and focus): %d\n", wid);
     windows_window_update(windows, wid);
@@ -139,13 +139,15 @@ void events_schedule_space_refresh(void) {
               generation)) {
         return;
       }
-      windows_draw_borders_on_current_spaces(&g_windows);
-      windows_determine_and_focus_active_window(&g_windows);
+      windows_refresh_after_space_change(
+          &g_windows,
+          i == SPACE_CHANGE_RETRY_COUNT - 1);
     });
   }
 }
 
 static void space_handler() {
+  windows_adaptive_space_change_started(&g_windows);
   events_schedule_space_refresh();
 }
 
