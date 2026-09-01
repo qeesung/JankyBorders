@@ -170,22 +170,22 @@ static bool parse_color(struct color_style* style,
                         bool allow_per_edge) {
   if (parse_gradient(style,
                      token,
-                     "=glow(gradient(top_left=0x%x,bottom_right=0x%x))%n",
+                     "=glow(gradient(top_left=0x%8x,bottom_right=0x%8x))%n",
                      TL_TO_BR,
                      true)
       || parse_gradient(style,
                         token,
-                        "=glow(gradient(top_right=0x%x,bottom_left=0x%x))%n",
+                        "=glow(gradient(top_right=0x%8x,bottom_left=0x%8x))%n",
                         TR_TO_BL,
                         true)
       || parse_gradient(style,
                         token,
-                        "=gradient(top_left=0x%x,bottom_right=0x%x)%n",
+                        "=gradient(top_left=0x%8x,bottom_right=0x%8x)%n",
                         TL_TO_BR,
                         false)
       || parse_gradient(style,
                         token,
-                        "=gradient(top_right=0x%x,bottom_left=0x%x)%n",
+                        "=gradient(top_right=0x%8x,bottom_left=0x%8x)%n",
                         TR_TO_BL,
                         false)
       || parse_solid(style, token, true, allow_per_edge)

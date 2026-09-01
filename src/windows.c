@@ -121,6 +121,7 @@ static void windows_remove_all(struct table* windows) {
 void windows_recreate_all_borders(struct table* windows) {
   windows_remove_all(windows);
   windows_add_existing_windows(windows);
+  windows_determine_and_focus_active_window(windows);
 }
 
 void windows_update_all(struct table* windows) {

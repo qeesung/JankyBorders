@@ -121,7 +121,10 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     if (!gradient) {
       uint32_t fallback_color = color_style.gradient.color1;
       color_style.stype = COLOR_STYLE_SOLID;
-      color_style.color = fallback_color;
+      for (int side = 0; side < BORDER_SIDE_COUNT; ++side) {
+        color_style.colors[side] = fallback_color;
+      }
+      colors = color_style.colors;
       drawing_set_stroke_and_fill(border->context,
                                   fallback_color,
                                   false         );
@@ -481,7 +484,9 @@ void border_hide(struct border* border) {
 
 void border_unhide(struct border* border) {
   pthread_mutex_lock(&border->mutex);
-  if (border->too_small
+  struct settings* settings = border_get_settings(border);
+  if (settings->border_style == BORDER_STYLE_NONE
+      || border->too_small
       || border->external_proxy_wid
       || (!border->sticky && !is_space_visible(border->cid, border->sid))) {
     pthread_mutex_unlock(&border->mutex);
@@ -489,7 +494,6 @@ void border_unhide(struct border* border) {
   }
 
   if (border->wid) {
-    struct settings* settings = border_get_settings(border);
     CFTypeRef transaction = SLSTransactionCreate(border->cid);
     if (transaction) {
       SLSTransactionOrderWindow(transaction,

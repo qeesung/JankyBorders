@@ -5,6 +5,11 @@
 
 #include "../src/parse.c"
 
+bool g_blacklist_enabled = false;
+struct table g_blacklist;
+bool g_whitelist_enabled = false;
+struct table g_whitelist;
+
 static void assert_close(float actual, float expected) {
   assert(fabsf(actual - expected) < 0.0001f);
 }
@@ -105,6 +110,16 @@ int main(void) {
   assert(mask == 0);
   assert(memcmp(&settings.inactive_window,
                 &previous_inactive,
+                sizeof(struct color_style)) == 0);
+
+  struct color_style previous_gradient = settings.active_window;
+  char invalid_long_gradient[] =
+      "active_color=gradient(top_left=0x100000000,bottom_right=0xff000000)";
+  char* invalid_long_gradient_arguments[] = { invalid_long_gradient };
+  mask = parse_settings(&settings, 1, invalid_long_gradient_arguments);
+  assert(mask == 0);
+  assert(memcmp(&settings.active_window,
+                &previous_gradient,
                 sizeof(struct color_style)) == 0);
 
   struct color_style previous_style = settings.active_window;

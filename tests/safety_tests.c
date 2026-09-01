@@ -155,7 +155,10 @@ static void test_filter_scope(void) {
 
   struct color_style original = {
     .stype = COLOR_STYLE_SOLID,
-    .color = 0xff123456
+    .colors = { 0xff123456,
+                0xff123456,
+                0xff123456,
+                0xff123456 }
   };
   settings.active_window = original;
   char* truncated_gradient[] = {
@@ -164,7 +167,9 @@ static void test_filter_scope(void) {
   assert(!(parse_settings(&settings, 1, truncated_gradient)
            & BORDER_UPDATE_MASK_ACTIVE));
   assert(settings.active_window.stype == original.stype);
-  assert(settings.active_window.color == original.color);
+  assert(memcmp(settings.active_window.colors,
+                original.colors,
+                sizeof(original.colors)) == 0);
 
   table_free(&g_blacklist);
   table_free(&g_whitelist);
