@@ -34,13 +34,16 @@ static inline void drawing_set_stroke_and_fill(CGContextRef context, uint32_t co
 
   if (glow) {
     CGColorRef color_ref = CGColorCreateGenericRGB(r, g, b, 1.0);
-    CGContextSetShadowWithColor(context, CGSizeZero, 10.0, color_ref);
-    CGColorRelease(color_ref);
+    if (color_ref) {
+      CGContextSetShadowWithColor(context, CGSizeZero, 10.0, color_ref);
+      CGColorRelease(color_ref);
+    }
   }
 }
 
 static inline void drawing_clip_between_rect_and_path(CGContextRef context, CGRect frame, CGPathRef path) {
   CGMutablePathRef clip_path = CGPathCreateMutable();
+  if (!clip_path) return;
   CGPathAddRect(clip_path, NULL, frame);
   CGPathAddPath(clip_path, NULL, path);
   CGContextAddPath(context, clip_path);
@@ -51,6 +54,7 @@ static inline void drawing_clip_between_rect_and_path(CGContextRef context, CGRe
 static inline void drawing_add_rect_with_inset(CGContextRef context, CGRect rect, float inset) {
   CGRect square_rect = CGRectInset(rect, inset, inset);
   CGPathRef square_path = CGPathCreateWithRect(square_rect, NULL);
+  if (!square_path) return;
   CGContextAddPath(context, square_path);
   CFRelease(square_path);
 }
@@ -60,6 +64,7 @@ static inline void drawing_add_rounded_rect(CGContextRef context, CGRect rect, f
                                                       border_radius,
                                                       border_radius,
                                                       NULL          );
+  if (!stroke_path) return;
 
   CGContextAddPath(context, stroke_path);
   CFRelease(stroke_path);
@@ -102,10 +107,20 @@ static inline CGGradientRef drawing_create_gradient(struct gradient* gradient, C
   colors_from_hex(gradient->color2, &a2, &r2, &g2, &b2);
   CGColorRef c[] = { CGColorCreateSRGB(r1, g1, b1, a1),
                      CGColorCreateSRGB(r2, g2, b2, a2) };
+  if (!c[0] || !c[1]) {
+    if (c[0]) CGColorRelease(c[0]);
+    if (c[1]) CGColorRelease(c[1]);
+    return NULL;
+  }
   CFArrayRef cfc = CFArrayCreate(NULL,
                                  (const void **)c,
                                  2,
                                  &kCFTypeArrayCallBacks);
+  if (!cfc) {
+    CGColorRelease(c[0]);
+    CGColorRelease(c[1]);
+    return NULL;
+  }
   CGGradientRef result = CGGradientCreateWithColors(NULL, cfc, NULL);
   CFRelease(cfc);
   CGColorRelease(c[0]);
@@ -121,4 +136,3 @@ static inline CGGradientRef drawing_create_gradient(struct gradient* gradient, C
   direction[1] = CGPointApplyAffineTransform(direction[1], trans);
   return result;
 }
-

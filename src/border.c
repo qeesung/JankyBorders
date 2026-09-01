@@ -74,6 +74,14 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     gradient = drawing_create_gradient(&color_style.gradient,
                                        trans,
                                        gradient_dir          );
+    if (!gradient) {
+      uint32_t fallback_color = color_style.gradient.color1;
+      color_style.stype = COLOR_STYLE_SOLID;
+      color_style.color = fallback_color;
+      drawing_set_stroke_and_fill(border->context,
+                                  fallback_color,
+                                  false         );
+    }
   }
 
   CGContextSetLineWidth(border->context, settings->border_width);
@@ -81,6 +89,12 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
 
   CGRect path_rect = border->drawing_bounds;
   CGMutablePathRef inner_clip_path = CGPathCreateMutable();
+  if (!inner_clip_path) {
+    border->needs_redraw = true;
+    if (gradient) CGGradientRelease(gradient);
+    CGContextRestoreGState(border->context);
+    return;
+  }
   if (settings->border_style == BORDER_STYLE_SQUARE
       && settings->border_order == BORDER_ORDER_ABOVE
       && settings->border_width >= BORDER_TSMW) {
@@ -138,7 +152,7 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
                                                corner_radius  );
     }
   }
-  CGGradientRelease(gradient);
+  if (gradient) CGGradientRelease(gradient);
 
   if (settings->show_background && settings->border_order != 1) {
     CGContextRestoreGState(border->context);
@@ -162,10 +176,20 @@ void border_create_window(struct border* border, CGRect frame, bool unmanaged, b
   pthread_mutex_lock(&border->mutex);
   int cid = border->cid;
   border->wid = window_create(cid, frame, hidpi, unmanaged);
+  if (!border->wid) {
+    pthread_mutex_unlock(&border->mutex);
+    return;
+  }
 
   border->frame = frame;
   border->needs_redraw = true;
   border->context = SLWindowContextCreate(cid, border->wid, NULL);
+  if (!border->context) {
+    SLSReleaseWindow(cid, border->wid);
+    border->wid = 0;
+    pthread_mutex_unlock(&border->mutex);
+    return;
+  }
   CGContextSetInterpolationQuality(border->context, kCGInterpolationNone);
 
   if (!border->sid) border->sid = window_space_id(cid, border->target_wid);
@@ -200,6 +224,7 @@ void border_update_internal(struct border* border, struct settings* settings) {
                          frame,
                          border->is_proxy,
                          settings->hidpi  );
+    if (!border->wid || !border->context) return;
   }
 
   bool disabled_update = false;
@@ -207,8 +232,12 @@ void border_update_internal(struct border* border, struct settings* settings) {
     disabled_update = true;
     SLSDisableUpdate(cid);
 
-    CFTypeRef frame_region;
-    CGSNewRegionWithRect(&frame, &frame_region);
+    CFTypeRef frame_region = NULL;
+    if (CGSNewRegionWithRect(&frame, &frame_region) != kCGErrorSuccess
+        || !frame_region) {
+      SLSReenableUpdate(cid);
+      return;
+    }
 
     SLSWindowFreezeWithOptions(border->cid, border->wid, NULL);
     SLSSetWindowShape(border->cid, border->wid, border->origin.x, border->origin.y, frame_region);
@@ -283,8 +312,12 @@ void border_init(struct border* border, int cid) {
 
 struct border* border_create() {
   struct border* border = malloc(sizeof(struct border));
+  if (!border) return NULL;
   int cid = 0;
-  SLSNewConnection(0, &cid);
+  if (SLSNewConnection(0, &cid) != kCGErrorSuccess || !cid) {
+    free(border);
+    return NULL;
+  }
   border_init(border, cid);
   return border;
 }

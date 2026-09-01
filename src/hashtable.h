@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #define TABLE_HASH_FUNC(name) unsigned long name(void* key)
 typedef TABLE_HASH_FUNC(table_hash_func);
 
@@ -22,11 +25,11 @@ struct table
   struct bucket** buckets;
 };
 
-void table_init(struct table* table, int capacity, table_hash_func hash, table_compare_func cmp);
+bool table_init(struct table* table, int capacity, table_hash_func hash, table_compare_func cmp);
 void table_free(struct table* table);
-void table_clear(struct table* table);
+bool table_clear(struct table* table);
 
 #define table_add(table, key, value) _table_add(table, key, sizeof(*key), value)
-void _table_add(struct table* table, void* key, int key_size, void* value);
+bool _table_add(struct table* table, void* key, size_t key_size, void* value);
 void table_remove(struct table* table, void* key);
 void* table_find(struct table* table, void* key);

@@ -41,9 +41,12 @@ struct settings g_settings = { .enabled = true,
                                .hidpi = false,
                                .show_background = false,
                                .border_order = BORDER_ORDER_BELOW,
-                               .ax_focus = false,
-                               .blacklist_enabled = false,
-                               .whitelist_enabled = false                    };
+                               .ax_focus = false                             };
+
+bool g_blacklist_enabled = false;
+struct table g_blacklist;
+bool g_whitelist_enabled = false;
+struct table g_whitelist;
 
 static TABLE_HASH_FUNC(hash_windows) {
   return *(uint32_t *) key;
@@ -68,14 +71,19 @@ static TABLE_COMPARE_FUNC(cmp_blacklist) {
 }
 
 static void message_handler(void* data, uint32_t len) {
-  char* message = data;
+  char** arguments = NULL;
+  int argument_count = 0;
+  if (!mach_decode_arguments(data, len, &arguments, &argument_count)) return;
+
+  if (!parse_settings_scope_is_valid(argument_count, arguments)) {
+    printf("[?] Borders: blacklist/whitelist cannot be applied to one window\n");
+    free(arguments);
+    return;
+  }
+
   uint32_t update_mask = 0;
   struct settings settings = g_settings;
-
-  while(message && *message) {
-    update_mask |= parse_settings(&settings, 1, &message);
-    message += strlen(message) + 1;
-  }
+  update_mask = parse_settings(&settings, argument_count, arguments);
 
   if (settings.apply_to > 0) {
     struct border* border = table_find(&g_windows, &settings.apply_to);
@@ -85,6 +93,7 @@ static void message_handler(void* data, uint32_t len) {
       border->needs_redraw = true;
       border_update(border, true);
     }
+    free(arguments);
     return;
   } else {
     g_settings = settings;
@@ -94,14 +103,10 @@ static void message_handler(void* data, uint32_t len) {
         if (bucket->value) {
           struct border* border = bucket->value;
           if (border->setting_override.enabled) {
-            char* message = data;
-            uint32_t window_update_mask = 0;
-            while(message && *message) {
-              window_update_mask |= parse_settings(&border->setting_override,
-                                                   1,
-                                                   &message                  );
-              message += strlen(message) + 1;
-            }
+            uint32_t window_update_mask
+              = parse_settings_override(&border->setting_override,
+                                        argument_count,
+                                        arguments                   );
 
             if (window_update_mask
                 && !((update_mask & BORDER_UPDATE_MASK_ALL)
@@ -116,6 +121,8 @@ static void message_handler(void* data, uint32_t len) {
     }
   }
 
+  free(arguments);
+
   if (update_mask & BORDER_UPDATE_MASK_RECREATE_ALL) {
     windows_recreate_all_borders(&g_windows);
   } else if (update_mask & BORDER_UPDATE_MASK_ALL) {
@@ -127,29 +134,26 @@ static void message_handler(void* data, uint32_t len) {
   }
 }
 
-static void send_args_to_server(mach_port_t port, int argc, char** argv) {
-  int message_length = argc;
-  int argl[argc];
-
-  for (int i = 1; i < argc; i++) {
-    argl[i] = strlen(argv[i]);
-    message_length += argl[i] + 1;
+static bool send_args_to_server(mach_port_t port, int argc, char** argv) {
+  void* message = NULL;
+  uint32_t message_length = 0;
+  if (!mach_encode_arguments(argc - 1,
+                             argv + 1,
+                             &message,
+                             &message_length)) {
+    return false;
   }
 
-  char message[(sizeof(char) * message_length)];
-  char* temp = message;
-
-  for (int i = 1; i < argc; i++) {
-    memcpy(temp, argv[i], argl[i]);
-    temp += argl[i];
-    *temp++ = '\0';
-  }
-  *temp++ = '\0';
-
-  mach_send_message(port, message, message_length);
+  bool sent = mach_send_message(port, message, message_length);
+  free(message);
+  return sent;
 }
 
 static void event_callback(CFMachPortRef port, void* message, CFIndex size, void* context) {
+  (void)port;
+  (void)message;
+  (void)size;
+  (void)context;
   int cid = SLSMainConnectionID();
   CGEventRef event = SLEventCreateNextEvent(cid);
   if (!event) return;
@@ -181,15 +185,24 @@ int main(int argc, char** argv) {
     exit(EXIT_SUCCESS);
   }
 
-  table_init(&g_settings.blacklist, 64, hash_blacklist, cmp_blacklist);
-  table_init(&g_settings.whitelist, 64, hash_blacklist, cmp_blacklist);
+  if (!parse_settings_scope_is_valid(argc - 1, argv + 1)) {
+    fprintf(stderr,
+            "[?] Borders: blacklist/whitelist cannot be applied to one window\n");
+    return EXIT_FAILURE;
+  }
+
+  if (!table_init(&g_blacklist, 64, hash_blacklist, cmp_blacklist)
+      || !table_init(&g_whitelist, 64, hash_blacklist, cmp_blacklist)) {
+    error("[!] Borders: Failed to allocate application filters\n");
+  }
   g_settings.ax_focus = ax_check_trust(true);
 
   uint32_t update_mask = parse_settings(&g_settings, argc - 1, argv + 1);
   mach_port_t server_port = mach_get_bs_port(BS_NAME);
   if (server_port && update_mask) {
-    send_args_to_server(server_port, argc, argv);
-    return 0;
+    return send_args_to_server(server_port, argc, argv)
+           ? EXIT_SUCCESS
+           : EXIT_FAILURE;
   } else if (server_port) {
     error("A borders instance is already running and no valid arguments"
           " where provided. To modify properties of the running instance"
@@ -198,7 +211,9 @@ int main(int argc, char** argv) {
 
   load_symbols();
   pid_for_task(mach_task_self(), &g_pid);
-  table_init(&g_windows, 1024, hash_windows, cmp_windows);
+  if (!table_init(&g_windows, 1024, hash_windows, cmp_windows)) {
+    error("[!] Borders: Failed to allocate window table\n");
+  }
 
   g_server_port = create_connection_server_port();
 
@@ -213,20 +228,26 @@ int main(int argc, char** argv) {
                                                           event_callback,
                                                           NULL,
                                                           false          );
-
-    _CFMachPortSetOptions(cf_mach_port, 0x40);
-    CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL,
-                                                              cf_mach_port,
-                                                              0            );
-
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopDefaultMode);
-    CFRelease(cf_mach_port);
-    CFRelease(source);
+    if (cf_mach_port) {
+      _CFMachPortSetOptions(cf_mach_port, 0x40);
+      CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL,
+                                                                cf_mach_port,
+                                                                0            );
+      if (source) {
+        CFRunLoopAddSource(CFRunLoopGetCurrent(),
+                           source,
+                           kCFRunLoopDefaultMode);
+        CFRelease(source);
+      }
+      CFRelease(cf_mach_port);
+    }
   }
 
   windows_add_existing_windows(&g_windows);
 
-  mach_server_begin(&g_mach_server, message_handler);
+  if (!mach_server_begin(&g_mach_server, message_handler)) {
+    error("[!] Borders: Failed to start command server\n");
+  }
   if (!update_mask) execute_config_file("borders", "bordersrc");
 
   #ifdef _YABAI_INTEGRATION

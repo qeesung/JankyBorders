@@ -1,18 +1,30 @@
 #include "hashtable.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-void table_init(struct table* table, int capacity, table_hash_func hash, table_compare_func cmp) {
+bool table_init(struct table* table, int capacity, table_hash_func hash, table_compare_func cmp) {
+  if (!table || capacity <= 0 || !hash || !cmp
+      || (size_t)capacity > SIZE_MAX / sizeof(struct bucket*)) {
+    return false;
+  }
+
   table->count = 0;
   table->capacity = capacity;
   table->max_load = 0.75f;
   table->hash = hash;
   table->cmp = cmp;
-  table->buckets = malloc(sizeof(struct bucket*) * capacity);
-  memset(table->buckets, 0, sizeof(struct bucket*) * capacity);
+  table->buckets = calloc((size_t)capacity, sizeof(struct bucket*));
+  if (!table->buckets) {
+    table->capacity = 0;
+    return false;
+  }
+  return true;
 }
 
 void table_free(struct table *table) {
+  if (!table) return;
+
   for (int i = 0; i < table->capacity; ++i) {
     struct bucket *next, *bucket = table->buckets[i];
     while (bucket) {
@@ -27,18 +39,26 @@ void table_free(struct table *table) {
     free(table->buckets);
     table->buckets = NULL;
   }
+  table->count = 0;
+  table->capacity = 0;
 }
 
-void table_clear(struct table* table) {
+bool table_clear(struct table* table) {
+  if (!table) return false;
   table_hash_func* hash = table->hash;
   table_compare_func* cmp = table->cmp;
-  uint32_t capacity = table->capacity;
+  int capacity = table->capacity;
 
   table_free(table);
-  table_init(table, capacity, hash, cmp);
+  return table_init(table, capacity, hash, cmp);
 }
 
 struct bucket** table_get_bucket(struct table* table, void* key) {
+  if (!table || !key || !table->buckets || table->capacity <= 0
+      || !table->hash || !table->cmp) {
+    return NULL;
+  }
+
   struct bucket** bucket = table->buckets
                            + (table->hash(key) % table->capacity);
   while (*bucket) {
@@ -50,56 +70,75 @@ struct bucket** table_get_bucket(struct table* table, void* key) {
   return bucket;
 }
 
-void table_rehash(struct table *table) {
+static bool table_rehash(struct table *table) {
+  if (!table || !table->buckets || table->capacity <= 0
+      || table->capacity > INT32_MAX / 2) {
+    return false;
+  }
+
   struct bucket **old_buckets = table->buckets;
   int old_capacity = table->capacity;
+  int new_capacity = 2 * old_capacity;
+  struct bucket** new_buckets = calloc((size_t)new_capacity,
+                                       sizeof(struct bucket*));
+  if (!new_buckets) return false;
 
-  table->count = 0;
-  table->capacity = 2 * table->capacity;
-  table->buckets = malloc(sizeof(struct bucket *) * table->capacity);
-  memset(table->buckets, 0, sizeof(struct bucket *) * table->capacity);
+  table->capacity = new_capacity;
+  table->buckets = new_buckets;
 
   for (int i = 0; i < old_capacity; ++i) {
-    struct bucket *next_bucket, *old_bucket = old_buckets[i];
+    struct bucket *old_bucket = old_buckets[i];
     while (old_bucket) {
+      struct bucket* next_bucket = old_bucket->next;
       struct bucket **new_bucket = table_get_bucket(table, old_bucket->key);
-      *new_bucket = malloc(sizeof(struct bucket));
-      (*new_bucket)->key = old_bucket->key;
-      (*new_bucket)->value = old_bucket->value;
-      (*new_bucket)->next = NULL;
-      ++table->count;
-      next_bucket = old_bucket->next;
-      free(old_bucket);
+      old_bucket->next = NULL;
+      *new_bucket = old_bucket;
       old_bucket = next_bucket;
     }
   }
 
   free(old_buckets);
+  return true;
 }
 
-void _table_add(struct table* table, void* key, int key_size, void* value) {
+bool _table_add(struct table* table, void* key, size_t key_size, void* value) {
+  if (!key || key_size == 0) return false;
   struct bucket** bucket = table_get_bucket(table, key);
+  if (!bucket) return false;
+
   if (*bucket) {
     if (!(*bucket)->value) {
       (*bucket)->value = value;
     }
+    return true;
   } else {
-    *bucket = malloc(sizeof(struct bucket));
-    (*bucket)->key = malloc(key_size);
-    (*bucket)->value = value;
-    memcpy((*bucket)->key, key, key_size);
-    (*bucket)->next = NULL;
+    if (table->count == INT32_MAX) return false;
+    struct bucket* new_bucket = malloc(sizeof(struct bucket));
+    if (!new_bucket) return false;
+    new_bucket->key = malloc(key_size);
+    if (!new_bucket->key) {
+      free(new_bucket);
+      return false;
+    }
+    new_bucket->value = value;
+    memcpy(new_bucket->key, key, key_size);
+    new_bucket->next = NULL;
+    *bucket = new_bucket;
     ++table->count;
 
     float load = (1.0f * table->count) / table->capacity;
     if (load > table->max_load) {
       table_rehash(table);
     }
+    return true;
   }
 }
 
 void table_remove(struct table* table, void* key) {
-  struct bucket *next, **bucket = table_get_bucket(table, key);
+  struct bucket **bucket = table_get_bucket(table, key);
+  if (!bucket) return;
+
+  struct bucket* next;
   if (*bucket) {
     free((*bucket)->key);
     next = (*bucket)->next;
@@ -110,6 +149,8 @@ void table_remove(struct table* table, void* key) {
 }
 
 void* table_find(struct table* table, void* key) {
-  struct bucket* bucket = *table_get_bucket(table, key);
+  struct bucket** bucket_ref = table_get_bucket(table, key);
+  if (!bucket_ref) return NULL;
+  struct bucket* bucket = *bucket_ref;
   return bucket ? bucket->value : NULL;
 }

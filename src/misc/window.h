@@ -31,6 +31,7 @@ static inline uint64_t window_tags(int cid, uint32_t wid) {
                                                sizeof(uint32_t),
                                                1,
                                                kCFNumberSInt32Type);
+  if (!window_ref) return 0;
   CFTypeRef query = SLSWindowQueryWindows(cid, window_ref, 0x0);
   if (query) {
     CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
@@ -62,6 +63,7 @@ static inline uint32_t get_front_window(int cid) {
                                                    sizeof(uint64_t),
                                                    1,
                                                    kCFNumberSInt64Type);
+  if (!space_list_ref) return 0;
 
   CFArrayRef window_list = SLSCopyWindowsWithOptionsAndTags(cid,
                                                             target_cid,
@@ -102,6 +104,7 @@ static inline uint64_t window_space_id(int cid, uint32_t wid) {
                                                     sizeof(uint32_t),
                                                     1,
                                                     kCFNumberSInt32Type);
+  if (!window_list_ref) return 0;
 
   CFArrayRef space_list_ref = SLSCopySpacesForWindows(cid,
                                                       0x7,
@@ -113,7 +116,9 @@ static inline uint64_t window_space_id(int cid, uint32_t wid) {
     if (count > 0) {
       CFNumberRef id_ref = (CFNumberRef)CFArrayGetValueAtIndex(space_list_ref,
                                                                0             );
-      CFNumberGetValue(id_ref, CFNumberGetType(id_ref), &sid);
+      if (id_ref && CFGetTypeID(id_ref) == CFNumberGetTypeID()) {
+        CFNumberGetValue(id_ref, kCFNumberSInt64Type, &sid);
+      }
     }
     CFRelease(space_list_ref);
   }
@@ -133,6 +138,7 @@ static inline uint64_t window_space_id(int cid, uint32_t wid) {
 
 extern mach_port_t g_server_port;
 static inline int32_t window_sub_level(int cid, uint32_t wid) {
+  (void)cid;
   mach_msg_id_t request = 0x73c3;
   if (__builtin_available(macOS 26.0, *)) request = 0x76e3;
 
@@ -200,16 +206,17 @@ static inline int window_level(int cid, uint32_t wid) {
                                                sizeof(uint32_t),
                                                1,
                                                kCFNumberSInt32Type );
+  if (!target_ref) return 0;
 
   CFTypeRef query = SLSWindowQueryWindows(cid, target_ref, 0x0);
-  CFTypeRef iterator = SLSWindowQueryResultCopyWindows(query);
+  CFTypeRef iterator = query ? SLSWindowQueryResultCopyWindows(query) : NULL;
   int level = 0;
   if (iterator && SLSWindowIteratorAdvance(iterator)) {
     level = SLSWindowIteratorGetLevel(iterator);
   }
   if (iterator) CFRelease(iterator);
 
-  CFRelease(query);
+  if (query) CFRelease(query);
   CFRelease(target_ref);
 
   return level;
@@ -220,22 +227,27 @@ static inline void window_send_to_space(int cid, uint32_t wid, uint32_t sid) {
                                                 sizeof(uint32_t),
                                                 1,
                                                 kCFNumberSInt32Type);
+  if (!window_list) return;
 
   SLSMoveWindowsToManagedSpace(cid, window_list, sid);
   CFRelease(window_list);
 }
 
 static inline uint32_t window_create(int cid, CGRect frame, bool hidpi, bool unmanaged) {
-  uint32_t id;
+  uint32_t id = 0;
   CFTypeRef frame_region = NULL;
   uint64_t set_tags = (1ULL << 1) | (1ULL << 9);
   uint64_t clear_tags = 0;
 
   CGSNewRegionWithRect(&frame, &frame_region);
-  assert(frame_region != NULL);
+  if (!frame_region) return 0;
 
   if (unmanaged) {
     CFTypeRef empty_region = CGRegionCreateEmptyRegion();
+    if (!empty_region) {
+      CFRelease(frame_region);
+      return 0;
+    }
     SLSNewWindowWithOpaqueShapeAndContext(cid,
                                           kCGBackingStoreBuffered,
                                           frame_region,
@@ -247,7 +259,7 @@ static inline uint32_t window_create(int cid, CGRect frame, bool hidpi, bool unm
                                           64,
                                           &id,
                                           NULL                    );
-    SLSSetWindowAlpha(cid, id, 0.f);
+    if (id) SLSSetWindowAlpha(cid, id, 0.f);
     CFRelease(empty_region);
   } else {
     SLSNewWindow(cid,
@@ -260,7 +272,7 @@ static inline uint32_t window_create(int cid, CGRect frame, bool hidpi, bool unm
   CFRelease(frame_region);
 
   uint32_t wid = id;
-  assert(wid != 0);
+  if (!wid) return 0;
 
   SLSSetWindowResolution(cid, wid, hidpi ? 2.0f : 1.0f);
   SLSSetWindowTags(cid, wid, &set_tags, 64);
@@ -271,19 +283,22 @@ static inline uint32_t window_create(int cid, CGRect frame, bool hidpi, bool unm
   CFNumberRef shadow_density_cf = CFNumberCreate(kCFAllocatorDefault,
                                                  kCFNumberCFIndexType,
                                                  &shadow_density      );
+  if (shadow_density_cf) {
+    const void *keys[1] = { CFSTR("com.apple.WindowShadowDensity") };
+    const void *values[1] = { shadow_density_cf };
+    CFDictionaryRef shadow_props_cf = CFDictionaryCreate(NULL,
+                                               keys,
+                                               values,
+                                               1,
+                                               &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
 
-  const void *keys[1] = { CFSTR("com.apple.WindowShadowDensity") };
-  const void *values[1] = { shadow_density_cf };
-  CFDictionaryRef shadow_props_cf = CFDictionaryCreate(NULL,
-                                             keys,
-                                             values,
-                                             1,
-                                             &kCFTypeDictionaryKeyCallBacks,
-                                             &kCFTypeDictionaryValueCallBacks);
-
-  SLSWindowSetShadowProperties(wid, shadow_props_cf);
-  CFRelease(shadow_density_cf);
-  CFRelease(shadow_props_cf);
+    if (shadow_props_cf) {
+      SLSWindowSetShadowProperties(wid, shadow_props_cf);
+      CFRelease(shadow_props_cf);
+    }
+    CFRelease(shadow_density_cf);
+  }
 
   return wid;
 }

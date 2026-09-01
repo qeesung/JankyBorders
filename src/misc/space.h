@@ -12,6 +12,7 @@ static inline uint64_t get_active_space_id(int cid) {
     CGGetActiveDisplayList(1, &did, &count);
     if (count == 1) {
       CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(did);
+      if (!uuid) return 0;
       uuid_ref = CFUUIDCreateString(NULL, uuid);
       CFRelease(uuid);
     }
@@ -34,7 +35,7 @@ static inline bool is_space_visible(int cid, uint64_t sid) {
   if (!displays) return false;
   uint32_t space_count = CFArrayGetCount(displays);
 
-  for (int i = 0; i < space_count; i++) {
+  for (uint32_t i = 0; i < space_count; i++) {
     if (sid == SLSManagedDisplayGetCurrentSpace(cid,
                            (CFStringRef)CFArrayGetValueAtIndex(displays, i))) {
       CFRelease(displays);

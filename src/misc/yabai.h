@@ -31,6 +31,11 @@ struct yabai_proxy_payload {
 };
 
 static CVReturn track_transform(CVDisplayLinkRef display_link, const CVTimeStamp* now, const CVTimeStamp* output_time, CVOptionFlags flags, CVOptionFlags* flags_out, void* context) {
+  (void)display_link;
+  (void)now;
+  (void)output_time;
+  (void)flags;
+  (void)flags_out;
   struct animation* animation = context;
   usleep(0.25*animation->frame_time);
 
@@ -191,34 +196,46 @@ static inline void yabai_proxy_end(struct table* windows, uint32_t wid, uint32_t
 }
 
 static void yabai_message(CFMachPortRef port, void* data, CFIndex size, void* context) {
-  if (size == sizeof(struct mach_message)) {
-    struct mach_message* message = data;
+  (void)port;
+  if (size < 0) return;
 
-    struct payload {
-      uint32_t event;
-      uint32_t count;
-      uint32_t proxy_wid[512];
-      uint32_t real_wid[512];
-    };
+  void* payload_data = NULL;
+  uint32_t payload_size = 0;
+  if (!mach_message_get_payload(data,
+                                (size_t)size,
+                                &payload_data,
+                                &payload_size)) {
+    return;
+  }
 
-    if (message->descriptor.size == sizeof(struct payload)) {
-      struct payload* payload = message->descriptor.address;
+  struct payload {
+    uint32_t event;
+    uint32_t count;
+    uint32_t proxy_wid[512];
+    uint32_t real_wid[512];
+  };
+
+  if (payload_size == sizeof(struct payload) && payload_data && context) {
+    struct payload* payload = payload_data;
+    // A count larger than the wire-format arrays means the whole event is
+    // malformed. Reject it instead of executing a truncated subset.
+    if (payload->count <= 512) {
       if (payload->event == 1325) {
-        for (int i = 0; i < payload->count; i++) {
+        for (uint32_t i = 0; i < payload->count; i++) {
           yabai_proxy_begin(context,
                             payload->proxy_wid[i],
                             payload->real_wid[i]  );
         }
       } else if (payload->event == 1326) {
-        for (int i = 0; i < payload->count; i++) {
+        for (uint32_t i = 0; i < payload->count; i++) {
           yabai_proxy_end(context,
                           payload->proxy_wid[i],
                           payload->real_wid[i]  );
         }
       }
     }
-    mach_msg_destroy(&message->header);
   }
+  mach_msg_destroy(&((struct mach_message*)data)->header);
 }
 
 static inline void yabai_register_mach_port(struct table* windows) {
@@ -241,17 +258,28 @@ static inline void yabai_register_mach_port(struct table* windows) {
 
   if (!mach_register_port(port, "git.felix.jbevent")) return;
 
-  CFMachPortContext context = {0, (void*)windows};
+  CFMachPortContext context = {
+    .version = 0,
+    .info = (void*)windows,
+    .retain = NULL,
+    .release = NULL,
+    .copyDescription = NULL
+  };
 
   CFMachPortRef cf_mach_port = CFMachPortCreateWithPort(NULL,
                                                         port,
                                                         yabai_message,
                                                         &context,
                                                         false         );
+  if (!cf_mach_port) return;
 
   CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(NULL,
                                                             cf_mach_port,
                                                             0            );
+  if (!source) {
+    CFRelease(cf_mach_port);
+    return;
+  }
 
   CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopDefaultMode);
   CFRelease(source);
