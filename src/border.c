@@ -181,17 +181,6 @@ static bool border_draw(struct border* border,
                         ? 9.0
                         : border->radius;
 
-  if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM) {
-    if (!drawing_draw_rounded_rect_with_inset(border->context,
-                                              path_rect,
-                                              corner_radius,
-                                              true,
-                                              colors,
-                                              color_style.glow)) {
-      goto draw_failed;
-    }
-  }
-
   if (color_style.stype == COLOR_STYLE_SOLID) {
     if (square) {
       if (!drawing_draw_square_with_inset(border->context,
@@ -202,6 +191,15 @@ static bool border_draw(struct border* border,
         goto draw_failed;
       }
     } else {
+      if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM
+          && !drawing_draw_rounded_rect_with_inset(border->context,
+                                                   path_rect,
+                                                   corner_radius,
+                                                   true,
+                                                   colors,
+                                                   color_style.glow)) {
+        goto draw_failed;
+      }
       if (!drawing_draw_rounded_rect_with_inset(border->context,
                                                 path_rect,
                                                 corner_radius,
@@ -223,6 +221,17 @@ static bool border_draw(struct border* border,
                                      square               )) {
         goto draw_failed;
       }
+    }
+
+    if (settings->border_style == BORDER_STYLE_ROUND_UNIFORM) {
+      CGContextSaveGState(border->context);
+      bool filled_gradient = drawing_fill_rounded_gradient(border->context,
+                                                           gradient,
+                                                           gradient_dir,
+                                                           path_rect,
+                                                           corner_radius);
+      CGContextRestoreGState(border->context);
+      if (!filled_gradient) goto draw_failed;
     }
 
     CGContextSaveGState(border->context);

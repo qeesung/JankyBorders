@@ -251,6 +251,21 @@ static inline bool drawing_draw_rounded_gradient_with_inset(
   return true;
 }
 
+static inline bool drawing_fill_rounded_gradient(
+    CGContextRef context,
+    CGGradientRef gradient,
+    CGPoint dir[2],
+    CGRect rect,
+    float border_radius) {
+  if (!gradient
+      || !drawing_add_rounded_rect(context, rect, border_radius)) {
+    return false;
+  }
+  CGContextClip(context);
+  CGContextDrawLinearGradient(context, gradient, dir[0], dir[1], 0);
+  return true;
+}
+
 static inline void drawing_draw_filled_path(CGContextRef context, CGPathRef path, uint32_t color) {
   drawing_set_fill(context, color);
   drawing_set_stroke(context, 0);

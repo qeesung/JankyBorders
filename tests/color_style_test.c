@@ -14,7 +14,53 @@ static void assert_close(float actual, float expected) {
   assert(fabsf(actual - expected) < 0.0001f);
 }
 
+static void test_rounded_gradient_fill_uses_gradient(void) {
+  enum { WIDTH = 32, HEIGHT = 32, BYTES_PER_PIXEL = 4 };
+  uint8_t pixels[WIDTH * HEIGHT * BYTES_PER_PIXEL] = { 0 };
+  CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+  assert(color_space);
+  CGContextRef context = CGBitmapContextCreate(
+      pixels,
+      WIDTH,
+      HEIGHT,
+      8,
+      WIDTH * BYTES_PER_PIXEL,
+      color_space,
+      kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+  CGColorSpaceRelease(color_space);
+  assert(context);
+
+  drawing_set_fill(context, 0xff00ff00);
+  struct gradient gradient_style = {
+    .direction = TL_TO_BR,
+    .color1 = 0xffff0000,
+    .color2 = 0xff0000ff,
+  };
+  CGPoint direction[2];
+  CGGradientRef gradient = drawing_create_gradient(
+      &gradient_style,
+      CGAffineTransformMakeScale(WIDTH, HEIGHT),
+      direction);
+  assert(gradient);
+  assert(drawing_fill_rounded_gradient(context,
+                                       gradient,
+                                       direction,
+                                       CGRectMake(2, 2, 28, 28),
+                                       5.0f));
+  CGContextFlush(context);
+
+  size_t center = ((HEIGHT / 2) * WIDTH + (WIDTH / 2)) * BYTES_PER_PIXEL;
+  assert(pixels[center + 3] > 240);
+  assert(pixels[center] > 40);
+  assert(pixels[center + 1] < 80);
+  assert(pixels[center + 2] > 40);
+
+  CGGradientRelease(gradient);
+  CGContextRelease(context);
+}
+
 int main(void) {
+  test_rounded_gradient_fill_uses_gradient();
   struct settings settings = {};
   char glow_gradient[] =
       "active_color=glow(gradient(top_left=0xffff0000,bottom_right=0xff0000ff))";
