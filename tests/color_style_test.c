@@ -46,7 +46,9 @@ int main(void) {
   assert(mask == BORDER_UPDATE_MASK_ACTIVE);
   assert(settings.active_window.stype == COLOR_STYLE_SOLID);
   assert(settings.active_window.glow);
-  assert(settings.active_window.color == 0xff123456);
+  for (int side = 0; side < BORDER_SIDE_COUNT; side++) {
+    assert(settings.active_window.colors[side] == 0xff123456);
+  }
 
   char plain_solid[] = "active_color=0xffabcdef";
   char* plain_solid_arguments[] = { plain_solid };
@@ -54,7 +56,56 @@ int main(void) {
   assert(mask == BORDER_UPDATE_MASK_ACTIVE);
   assert(settings.active_window.stype == COLOR_STYLE_SOLID);
   assert(!settings.active_window.glow);
-  assert(settings.active_window.color == 0xffabcdef);
+  for (int side = 0; side < BORDER_SIDE_COUNT; side++) {
+    assert(settings.active_window.colors[side] == 0xffabcdef);
+  }
+
+  char two_sides[] = "active_color=0xffff0000, 0xff0000ff";
+  char* two_sides_arguments[] = { two_sides };
+  mask = parse_settings(&settings, 1, two_sides_arguments);
+  assert(mask == BORDER_UPDATE_MASK_ACTIVE);
+  assert(settings.active_window.colors[BORDER_SIDE_TOP] == 0xffff0000);
+  assert(settings.active_window.colors[BORDER_SIDE_RIGHT] == 0);
+  assert(settings.active_window.colors[BORDER_SIDE_BOTTOM] == 0xff0000ff);
+  assert(settings.active_window.colors[BORDER_SIDE_LEFT] == 0);
+
+  char four_sides[] =
+      "inactive_color=glow(0xff000001,0xff000002,0xff000003,0xff000004)";
+  char* four_sides_arguments[] = { four_sides };
+  mask = parse_settings(&settings, 1, four_sides_arguments);
+  assert(mask == BORDER_UPDATE_MASK_INACTIVE);
+  assert(settings.inactive_window.glow);
+  for (int side = 0; side < BORDER_SIDE_COUNT; side++) {
+    assert(settings.inactive_window.colors[side] == 0xff000001u + side);
+  }
+
+  struct color_style previous_background = settings.background;
+  char invalid_background[] =
+      "background_color=0xff000001,0xff000002";
+  char* invalid_background_arguments[] = { invalid_background };
+  mask = parse_settings(&settings, 1, invalid_background_arguments);
+  assert(mask == 0);
+  assert(memcmp(&settings.background,
+                &previous_background,
+                sizeof(struct color_style)) == 0);
+
+  struct color_style previous_inactive = settings.inactive_window;
+  char invalid_three_sides[] =
+      "inactive_color=0xff000001,0xff000002,0xff000003";
+  char* invalid_three_sides_arguments[] = { invalid_three_sides };
+  mask = parse_settings(&settings, 1, invalid_three_sides_arguments);
+  assert(mask == 0);
+  assert(memcmp(&settings.inactive_window,
+                &previous_inactive,
+                sizeof(struct color_style)) == 0);
+
+  char invalid_long_hex[] = "inactive_color=0x100000000";
+  char* invalid_long_hex_arguments[] = { invalid_long_hex };
+  mask = parse_settings(&settings, 1, invalid_long_hex_arguments);
+  assert(mask == 0);
+  assert(memcmp(&settings.inactive_window,
+                &previous_inactive,
+                sizeof(struct color_style)) == 0);
 
   struct color_style previous_style = settings.active_window;
   char invalid[] = "active_color=glow(0xff123456)trailing";

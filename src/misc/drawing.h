@@ -1,6 +1,17 @@
 #pragma once
 #include <CoreGraphics/CoreGraphics.h>
 
+#define BORDER_SIDE_OVERLAP 0.25f
+#define BORDER_SIDE_OUTSET 1000.0f
+
+enum border_side {
+  BORDER_SIDE_TOP,
+  BORDER_SIDE_RIGHT,
+  BORDER_SIDE_BOTTOM,
+  BORDER_SIDE_LEFT,
+  BORDER_SIDE_COUNT
+};
+
 struct gradient {
   enum { TL_TO_BR, TR_TO_BL } direction;
   uint32_t color1;
@@ -94,9 +105,83 @@ static inline void drawing_add_rounded_rect(CGContextRef context, CGRect rect, f
   CFRelease(stroke_path);
 }
 
-static inline void drawing_draw_square_with_inset(CGContextRef context, CGRect rect, float inset) {
-  drawing_add_rect_with_inset(context, rect, inset);
-  CGContextFillPath(context);
+static inline CGPathRef drawing_create_rect_path(CGRect rect, float inset) {
+  return CGPathCreateWithRect(CGRectInset(rect, inset, inset), NULL);
+}
+
+static inline CGPathRef drawing_create_rounded_rect_path(CGRect rect, float border_radius) {
+  return CGPathCreateWithRoundedRect(rect,
+                                     border_radius,
+                                     border_radius,
+                                     NULL          );
+}
+
+static inline void drawing_clip_to_side(CGContextRef context,
+                                        CGRect rect,
+                                        enum border_side side) {
+  bool horizontal = side == BORDER_SIDE_TOP || side == BORDER_SIDE_BOTTOM;
+  float half_depth = 0.5f * (horizontal ? rect.size.height : rect.size.width);
+  float half_length = 0.5f * (horizontal ? rect.size.width : rect.size.height)
+                      + BORDER_SIDE_OVERLAP;
+  float depth = fminf(half_depth, half_length);
+
+  CGPoint region[] = {
+    { -(half_length + BORDER_SIDE_OUTSET),
+        half_depth + BORDER_SIDE_OUTSET },
+    {  (half_length + BORDER_SIDE_OUTSET),
+        half_depth + BORDER_SIDE_OUTSET },
+    {  (half_length - depth), half_depth - depth },
+    { -(half_length - depth), half_depth - depth }
+  };
+  CGAffineTransform transform =
+      CGAffineTransformRotate(CGAffineTransformMakeTranslation(
+                                  CGRectGetMidX(rect),
+                                  CGRectGetMidY(rect)),
+                              -M_PI_2 * side);
+  CGMutablePathRef path = CGPathCreateMutable();
+  CGPathAddLines(path, &transform, region, 4);
+  CGPathCloseSubpath(path);
+  CGContextAddPath(context, path);
+  CGContextClip(context);
+  CFRelease(path);
+}
+
+static inline bool colors_are_uniform(const uint32_t colors[BORDER_SIDE_COUNT]) {
+  return colors[0] == colors[1]
+         && colors[0] == colors[2]
+         && colors[0] == colors[3];
+}
+
+static inline void drawing_paint_path(CGContextRef context,
+                                      CGPathRef path,
+                                      CGRect rect,
+                                      const uint32_t colors[BORDER_SIDE_COUNT],
+                                      bool glow,
+                                      bool fill) {
+  bool per_side = colors && !colors_are_uniform(colors);
+  int pass_count = per_side ? BORDER_SIDE_COUNT : 1;
+  for (int side = 0; side < pass_count; side++) {
+    if (colors && !(colors[side] & 0xff000000)) continue;
+
+    CGContextSaveGState(context);
+    if (per_side) drawing_clip_to_side(context, rect, side);
+    if (colors) drawing_set_stroke_and_fill(context, colors[side], glow);
+    CGContextAddPath(context, path);
+    if (fill) CGContextFillPath(context);
+    else CGContextStrokePath(context);
+    CGContextRestoreGState(context);
+  }
+}
+
+static inline void drawing_draw_square_with_inset(
+    CGContextRef context,
+    CGRect rect,
+    float inset,
+    const uint32_t colors[BORDER_SIDE_COUNT],
+    bool glow) {
+  CGPathRef path = drawing_create_rect_path(rect, inset);
+  drawing_paint_path(context, path, rect, colors, glow, true);
+  CFRelease(path);
 }
 
 static inline void drawing_draw_square_gradient_with_inset(CGContextRef context,CGGradientRef gradient, CGPoint dir[2], CGRect rect, float inset) {
@@ -105,10 +190,16 @@ static inline void drawing_draw_square_gradient_with_inset(CGContextRef context,
   CGContextDrawLinearGradient(context, gradient, dir[0], dir[1], 0);
 }
 
-static inline void drawing_draw_rounded_rect_with_inset(CGContextRef context, CGRect rect, float border_radius, bool fill) {
-  drawing_add_rounded_rect(context, rect, border_radius);
-  if (fill) CGContextFillPath(context);
-  else CGContextStrokePath(context);
+static inline void drawing_draw_rounded_rect_with_inset(
+    CGContextRef context,
+    CGRect rect,
+    float border_radius,
+    bool fill,
+    const uint32_t colors[BORDER_SIDE_COUNT],
+    bool glow) {
+  CGPathRef path = drawing_create_rounded_rect_path(rect, border_radius);
+  drawing_paint_path(context, path, rect, colors, glow, fill);
+  CFRelease(path);
 }
 
 static inline void drawing_draw_rounded_gradient_with_inset(CGContextRef context,CGGradientRef gradient, CGPoint dir[2], CGRect rect, float border_radius) {

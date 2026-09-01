@@ -24,7 +24,7 @@ struct color_style {
   enum { COLOR_STYLE_GRADIENT, COLOR_STYLE_SOLID } stype;
   bool glow;
   union {
-    uint32_t color;
+    uint32_t colors[BORDER_SIDE_COUNT];
     struct gradient gradient;
   };
 };

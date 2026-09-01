@@ -75,10 +75,17 @@ could be issued.
 	red channel, _G_ the green channel and _B_ the blue channel. All
 	constituents take a base 16 number, i.e. _0-F_.
 
+	For active and inactive borders, a comma-separated list can color each
+	edge independently: one color applies to every edge, two colors apply to
+	the top and bottom edges (the other edges are hidden), and four colors
+	apply to the top, right, bottom, and left edges. Adjacent colors meet at
+	45-degree corners. Per-edge colors can also be wrapped in _glow(...)_.
+	Background colors remain single-color only.
+
 	The color argument can take the special values: ++
 	_gradient(top_left=0xAARRGGBB,bottom_right=0xAARRGGBB)_ ++
 	_gradient(top_right=0xAARRGGBB,bottom_left=0xAARRGGBB)_ ++
-	_glow(0xAARRGGBB)_ ++
+	_glow(0xAARRGGBB[,0xAARRGGBB...])_ ++
 	_glow(gradient(top_left=0xAARRGGBB,bottom_right=0xAARRGGBB))_ ++
 	_glow(gradient(top_right=0xAARRGGBB,bottom_left=0xAARRGGBB))_ ++
 (You might need to quote these arguments depending on your shell)

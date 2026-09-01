@@ -107,13 +107,20 @@ A color formatted as \fI0xAARRGGBB\fR, where \fIA\fR is the alpha channel, \fIR\
 red channel, \fIG\fR the green channel and \fIB\fR the blue channel.\& All
 constituents take a base 16 number, i.\&e.\& \fI0-F\fR.\&
 .PP
+For active and inactive borders, a comma-separated list can color each
+edge independently: one color applies to every edge, two colors apply to
+the top and bottom edges (the other edges are hidden), and four colors
+apply to the top, right, bottom, and left edges.\& Adjacent colors meet at
+45-degree corners.\& Per-edge colors can also be wrapped in \fIglow(.\&.\&.)\fR.\&
+Background colors remain single-color only.\&
+.PP
 The color argument can take the special values:
 .br
 	\fIgradient(top_left=0xAARRGGBB,bottom_right=0xAARRGGBB)\fR
 .br
 	\fIgradient(top_right=0xAARRGGBB,bottom_left=0xAARRGGBB)\fR
 .br
-	\fIglow(0xAARRGGBB)\fR
+	\fIglow(0xAARRGGBB[,0xAARRGGBB...])\fR
 .br
 	\fIglow(gradient(top_left=0xAARRGGBB,bottom_right=0xAARRGGBB))\fR
 .br

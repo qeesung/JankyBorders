@@ -71,24 +71,103 @@ static bool parse_gradient(struct color_style* style,
   return true;
 }
 
+static int hex_digit_value(char digit) {
+  if (digit >= '0' && digit <= '9') return digit - '0';
+  if (digit >= 'a' && digit <= 'f') return digit - 'a' + 10;
+  if (digit >= 'A' && digit <= 'F') return digit - 'A' + 10;
+  return -1;
+}
+
+static void skip_inline_space(const char** cursor) {
+  while (**cursor == ' ' || **cursor == '\t') (*cursor)++;
+}
+
+static bool parse_hex_color(const char** cursor, uint32_t* color) {
+  if ((*cursor)[0] != '0' || (*cursor)[1] != 'x') return false;
+  *cursor += 2;
+
+  uint32_t value = 0;
+  int digits = 0;
+  int digit;
+  while ((digit = hex_digit_value(**cursor)) >= 0) {
+    if (digits == 8) return false;
+    value = (value << 4) | (uint32_t)digit;
+    digits++;
+    (*cursor)++;
+  }
+  if (!digits) return false;
+
+  *color = value;
+  return true;
+}
+
+static bool parse_color_list(uint32_t colors[BORDER_SIDE_COUNT],
+                             const char* token,
+                             char terminator,
+                             bool allow_per_edge) {
+  uint32_t parsed[BORDER_SIDE_COUNT] = {};
+  int count = 0;
+  const char* cursor = token;
+
+  while (count < BORDER_SIDE_COUNT) {
+    skip_inline_space(&cursor);
+    if (!parse_hex_color(&cursor, &parsed[count])) return false;
+    count++;
+    skip_inline_space(&cursor);
+    if (*cursor != ',') break;
+    cursor++;
+  }
+
+  skip_inline_space(&cursor);
+  if (terminator) {
+    if (*cursor != terminator || cursor[1] != '\0') return false;
+  } else if (*cursor != '\0') {
+    return false;
+  }
+
+  if (!allow_per_edge && count != 1) return false;
+  if (count == 1) {
+    for (int side = 0; side < BORDER_SIDE_COUNT; side++) {
+      colors[side] = parsed[0];
+    }
+  } else if (count == 2) {
+    colors[BORDER_SIDE_TOP] = parsed[0];
+    colors[BORDER_SIDE_RIGHT] = 0;
+    colors[BORDER_SIDE_BOTTOM] = parsed[1];
+    colors[BORDER_SIDE_LEFT] = 0;
+  } else if (count == BORDER_SIDE_COUNT) {
+    memcpy(colors, parsed, sizeof(parsed));
+  } else {
+    return false;
+  }
+  return true;
+}
+
 static bool parse_solid(struct color_style* style,
                         const char* token,
-                        const char* format,
-                        bool glow) {
-  uint32_t color;
-  int consumed = 0;
-  if (sscanf(token, format, &color, &consumed) != 1
-      || consumed != (int)strlen(token)) {
+                        bool glow,
+                        bool allow_per_edge) {
+  const char* prefix = glow ? "=glow(" : "=";
+  size_t prefix_length = strlen(prefix);
+  if (strncmp(token, prefix, prefix_length) != 0) return false;
+
+  uint32_t colors[BORDER_SIDE_COUNT];
+  if (!parse_color_list(colors,
+                        token + prefix_length,
+                        glow ? ')' : '\0',
+                        allow_per_edge)) {
     return false;
   }
 
   style->stype = COLOR_STYLE_SOLID;
   style->glow = glow;
-  style->color = color;
+  memcpy(style->colors, colors, sizeof(colors));
   return true;
 }
 
-static bool parse_color(struct color_style* style, const char* token) {
+static bool parse_color(struct color_style* style,
+                        const char* token,
+                        bool allow_per_edge) {
   if (parse_gradient(style,
                      token,
                      "=glow(gradient(top_left=0x%x,bottom_right=0x%x))%n",
@@ -109,8 +188,8 @@ static bool parse_color(struct color_style* style, const char* token) {
                         "=gradient(top_right=0x%x,bottom_left=0x%x)%n",
                         TR_TO_BL,
                         false)
-      || parse_solid(style, token, "=glow(0x%x)%n", true)
-      || parse_solid(style, token, "=0x%x%n", false)) {
+      || parse_solid(style, token, true, allow_per_edge)
+      || parse_solid(style, token, false, allow_per_edge)) {
     return true;
   }
 
@@ -136,25 +215,30 @@ static uint32_t parse_settings_internal(struct settings* settings,
     if (!arguments[i]) continue;
     if (str_starts_with(arguments[i], active_color)) {
       if (parse_color(&settings->active_window,
-                                 arguments[i] + strlen(active_color))) {
+                      arguments[i] + strlen(active_color),
+                      true                                )) {
         update_mask |= BORDER_UPDATE_MASK_ACTIVE;
       }
     }
     else  if (str_starts_with(arguments[i], inactive_color)) {
       if (parse_color(&settings->inactive_window,
-                                 arguments[i] + strlen(inactive_color))) {
+                      arguments[i] + strlen(inactive_color),
+                      true                                  )) {
         update_mask |= BORDER_UPDATE_MASK_INACTIVE;
       }
     }
     else if (str_starts_with(arguments[i], background_color)) {
       struct color_style bg;
-      if (parse_color(&bg, arguments[i] + strlen(background_color))) {
+      if (parse_color(&bg,
+                      arguments[i] + strlen(background_color),
+                      false                                  )) {
         if (bg.stype == COLOR_STYLE_GRADIENT) {
           printf("[?] Borders: background_color does not support gradients\n");
         } else {
           settings->background = bg;
           update_mask |= BORDER_UPDATE_MASK_ALL;
-          settings->show_background = settings->background.color & 0xff000000;
+          settings->show_background =
+              settings->background.colors[0] & 0xff000000;
         }
       }
     }

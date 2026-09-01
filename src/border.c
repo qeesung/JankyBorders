@@ -106,12 +106,13 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
   struct color_style color_style = border->focused
                                    ? settings->active_window
                                    : settings->inactive_window;
+  const uint32_t* colors = color_style.stype == COLOR_STYLE_SOLID
+                           ? color_style.colors
+                           : NULL;
 
   CGGradientRef gradient = NULL;
   CGPoint gradient_dir[2];
-  if (color_style.stype == COLOR_STYLE_SOLID) {
-    drawing_set_stroke_and_fill(border->context, color_style.color, color_style.glow);
-  } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
+  if (color_style.stype == COLOR_STYLE_GRADIENT) {
     CGAffineTransform trans = CGAffineTransformMakeScale(frame.size.width,
                                                          frame.size.height);
     gradient = drawing_create_gradient(&color_style.gradient,
@@ -168,19 +169,25 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     drawing_draw_rounded_rect_with_inset(border->context,
                                          path_rect,
                                          corner_radius,
-                                         true            );
+                                         true,
+                                         colors,
+                                         color_style.glow);
   }
 
   if (color_style.stype == COLOR_STYLE_SOLID) {
     if (square) {
       drawing_draw_square_with_inset(border->context,
                                      path_rect,
-                                     inset    );
+                                     inset,
+                                     colors,
+                                     color_style.glow);
     } else {
       drawing_draw_rounded_rect_with_inset(border->context,
                                            path_rect,
                                            corner_radius,
-                                           false           );
+                                           false,
+                                           colors,
+                                           color_style.glow);
     }
   } else if (color_style.stype == COLOR_STYLE_GRADIENT) {
     if (color_style.glow) {
@@ -219,7 +226,7 @@ static void border_draw(struct border* border, CGRect frame, struct settings* se
     if (color_style.stype == COLOR_STYLE_SOLID) {
       drawing_draw_filled_path(border->context,
                                inner_clip_path,
-                               color_style.color);
+                               color_style.colors[0]);
     }
   }
   CFRelease(inner_clip_path);
