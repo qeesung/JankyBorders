@@ -27,6 +27,8 @@ test: | bin
 	./bin/config_exec_test
 	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/test_active_only.c -o bin/test_active_only
 	./bin/test_active_only
+	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/window_policy_test.c -o bin/window_policy_test
+	./bin/window_policy_test
 
 test-sanitize: | bin
 	clang -std=c99 -Wall -Wextra -O1 -g $(SANITIZER_FLAGS) -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)
@@ -39,6 +41,8 @@ test-sanitize: | bin
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/config_exec_test_sanitize
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/test_active_only.c -o bin/test_active_only_sanitize
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/test_active_only_sanitize
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/window_policy_test.c -o bin/window_policy_test_sanitize
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/window_policy_test_sanitize
 bin:
 	mkdir bin
 

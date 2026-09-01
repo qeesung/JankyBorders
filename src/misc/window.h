@@ -2,27 +2,13 @@
 #include "extern.h"
 #include "helpers.h"
 #include "space.h"
-
-#define WINDOW_TAG_DOCUMENT      (1ULL << 0)
-#define WINDOW_TAG_FLOATING      (1ULL << 1)
-#define WINDOW_TAG_ATTACHED      (1ULL << 7)
-#define WINDOW_TAG_STICKY        (1ULL << 11)
-#define WINDOW_TAG_IGNORES_CYCLE (1ULL << 18)
-#define WINDOW_TAG_MODAL         (1ULL << 31)
+#include "../window_policy.h"
 
 static inline bool window_suitable(CFTypeRef iterator) {
   uint64_t tags = SLSWindowIteratorGetTags(iterator);
   uint64_t attributes = SLSWindowIteratorGetAttributes(iterator);
   uint32_t parent_wid = SLSWindowIteratorGetParentID(iterator);
-  if ((parent_wid == 0)
-       && ((attributes & 0x2) || (tags & 0x400000000000000))
-       && !(tags & WINDOW_TAG_ATTACHED)
-       && !(tags & WINDOW_TAG_IGNORES_CYCLE)
-       && ((tags & WINDOW_TAG_DOCUMENT) || ((tags & WINDOW_TAG_FLOATING)
-                                            && (tags & WINDOW_TAG_MODAL)))) {
-    return true;
-  }
-  return false;
+  return window_policy_is_suitable(tags, attributes, parent_wid);
 }
 
 static inline uint64_t window_tags(int cid, uint32_t wid) {
