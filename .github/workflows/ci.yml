@@ -37,5 +37,11 @@ jobs:
       - name: Build debug binary
         run: make debug
 
+      - name: Build with strict warnings
+        run: make warnings
+
       - name: Run unit tests
         run: make test
+
+      - name: Run sanitizer tests
+        run: make test-sanitize

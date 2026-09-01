@@ -1,12 +1,16 @@
 FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c 
 LIBS = -framework AppKit -framework CoreVideo -F/System/Library/PrivateFrameworks/ -framework SkyLight
 SAFETY_TEST_FILES = tests/safety_tests.c src/parse.c src/mach.c src/hashtable.c
+SANITIZER_FLAGS = -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
 
 all: | bin
 	clang -std=c99 -O3 -g $(FILES) -o bin/borders $(LIBS)
 
 debug: | bin
 	clang -std=c99 -O0 -g -DDEBUG $(FILES) -o bin/debug $(LIBS)
+
+warnings: | bin
+	clang -std=c99 -Wall -Wextra -Werror -O0 -g $(FILES) -o bin/warnings-check $(LIBS)
 
 asan: | bin
 	clang -std=c99 -Wall -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -g $(FILES) -o bin/debug $(LIBS)
@@ -25,12 +29,20 @@ test: | bin
 	./bin/test_active_only
 
 test-sanitize: | bin
-	clang -std=c99 -Wall -Wextra -O1 -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)
+	clang -std=c99 -Wall -Wextra -O1 -g $(SANITIZER_FLAGS) -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/safety_tests_sanitize
+	clang -std=c99 -Wall -Wextra -O1 -g $(SANITIZER_FLAGS) tests/color_style_test.c src/hashtable.c -o bin/color_style_test_sanitize $(LIBS)
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/color_style_test_sanitize
+	clang -std=c99 -Wall -Wextra -O1 -g $(SANITIZER_FLAGS) tests/config_path_test.c -o bin/config_path_test_sanitize
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/config_path_test_sanitize
+	clang -std=c99 -Wall -Wextra -O1 -g $(SANITIZER_FLAGS) tests/config_exec_test.c -o bin/config_exec_test_sanitize $(LIBS)
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/config_exec_test_sanitize
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/test_active_only.c -o bin/test_active_only_sanitize
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/test_active_only_sanitize
 bin:
 	mkdir bin
 
 clean:
 	rm -rf bin
 
-.PHONY: all debug asan test clean
+.PHONY: all debug warnings asan test test-sanitize clean
