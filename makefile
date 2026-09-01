@@ -17,6 +17,8 @@ test: | bin
 	./bin/safety_tests
 	clang -std=c99 -Wall -Wextra -O0 -g -ffunction-sections tests/color_style_test.c src/hashtable.c -Wl,-dead_strip $(LIBS) -o bin/color_style_test
 	./bin/color_style_test
+	clang -std=c99 -Wall -Wextra -O0 -g tests/config_path_test.c -o bin/config_path_test
+	./bin/config_path_test
 
 test-sanitize: | bin
 	clang -std=c99 -Wall -Wextra -O1 -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)

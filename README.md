@@ -50,11 +50,18 @@ The appearance can be adapted at any point in time.
 
 #### Using a configuration file (Optional)
 If the primary `borders` process is started without any arguments (or launched
-as a service by brew), it will search for a file at
-`~/.config/borders/bordersrc` and execute it on launch if found.
+as a service by brew), it searches for and executes the first existing file in
+this order:
+
+1. `$XDG_CONFIG_HOME/borders/bordersrc` when `XDG_CONFIG_HOME` is absolute
+2. `$HOME/.config/borders/bordersrc`
+3. `$HOME/.bordersrc` (legacy fallback)
+
+A relative `XDG_CONFIG_HOME` is ignored, as required by the XDG Base Directory
+specification.
 
 An example configuration file could look like this:
-`~/.config/borders/bordersrc`
+`${XDG_CONFIG_HOME:-$HOME/.config}/borders/bordersrc`
 ```bash
 #!/bin/bash
 
