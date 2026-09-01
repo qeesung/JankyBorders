@@ -1,7 +1,7 @@
 # Upstream issue and pull-request audit
 
-Snapshot date: 2026-09-01  
-Upstream baseline: `FelixKratz/JankyBorders@a7297ca` (`v1.9.0`)  
+Snapshot date: 2026-09-01
+Upstream baseline: `FelixKratz/JankyBorders@a7297ca` (`v1.9.0`)
 Scope: 59 open issues and 14 open pull requests at snapshot time.
 
 This fork prioritizes reproducible correctness, memory safety, native-fullscreen
@@ -95,7 +95,7 @@ Decision meanings:
 | #198 Build binaries | Partial reimplement | Add build/test CI only; exclude release creation and external Homebrew writes. |
 | #196 Active-only mode | Reimplement | Reuse the common helper-window Space migration path before enabling reuse across focus/Space changes. |
 | #195 Undefined-behavior fallbacks | Reimplement | Keep the defensive intent and cover allocation failures and zero-element arrays omitted by the patch. |
-| #191 Resize/orphan memory leak | Conditional reimplement | Conflicts with v1.9 resize code and proposes unsafe lifetime state; retain only measured, lifecycle-safe pieces. |
+| #191 Resize/orphan memory leak | Reimplement | Replace raw delayed pointers with ID re-resolution, drain pinned DisplayLink callbacks, and keep failed stops alive for safe retry. The original patch is not copied. |
 | #183 Window-title regex filters | Defer | Adds AX permission/scanning cost and fails unsafely when titles are unavailable. |
 | #170 Document uniform style | Adopted | Cherry-picked with original authorship as `f5ed5ea`. |
 | #156 LLVM troubleshooting | Reject | Recommends destructive package removal without establishing the root cause. |
@@ -104,5 +104,80 @@ Decision meanings:
 
 ## Completion record
 
-Implementation commits, exact verification commands, CI runs, dynamic test
-counts, and conditional-item measurements are appended here before delivery.
+### Integrated changes
+
+- Preserved upstream authorship for PR #170 (`f5ed5ea`), PR #135 (`061196a`),
+  PR #203 (`459201d`, `a53c760`), PR #206 (`954227f`), and PR #143
+  (`845ea6a`).
+- Reimplemented IPC/allocation safety from PR #205 and PR #195 in `6563b4e`,
+  `a896b52`, `e253283`, `8ec92f6`, `637f8c7`, and `924c0c9`.
+- Added XDG config handling, active-only mode, macOS 26 CI, and native window
+  suitability fixes in `27176c6` through `41e2b19`.
+- Added fullscreen-aware geometry and bounded helper Space recovery in
+  `d7dcf9b`; the normal helper path remains on the legacy API and only an
+  observed SID mismatch uses the macOS 26 bridge.
+- Reimplemented the safe part of PR #191 in `82c1d82`: callback user data is a
+  monotonically allocated, never-reused token; stop unregisters it before
+  draining pinned callbacks; failed CoreVideo stops retain the owning border
+  and retry instead of freeing live storage.
+
+### Local verification
+
+Target host: macOS 26.5.2 (25F84), arm64, with two external 3840 x 2160
+displays. The following commands exited 0 on the final code snapshot:
+
+```text
+make clean
+make
+make debug
+make warnings
+make test
+make test-sanitize
+make test-thread
+MACOSX_DEPLOYMENT_TARGET=12.0 make
+MACOSX_DEPLOYMENT_TARGET=12.0 make debug
+git diff --check
+```
+
+`clang --analyze` also exited 0. Its remaining diagnostics are the known
+ownership/type-model limitations around unannotated private CoreFoundation
+APIs; the two actionable Objective-C dead stores were removed in `37f8ede`.
+Two independent full-diff reviews found no P0, P1, or P2 defect.
+
+### Dynamic verification
+
+- Native fullscreen was exercised on the two-display host for square and round
+  `position=auto` rendering. The square inner corners remained square at width
+  6, and all four clipped fullscreen edges remained visible.
+- A fullscreen target/helper sample reported the same Space ID (`1000`), and a
+  separate migration sample moved a helper from SID `1` to SID `1044` within
+  the bounded retry window. Helper ownership also resolved to the main process
+  connection rather than a short-lived client connection.
+- Runtime IPC accepted round/inside/per-edge glow, uniform/center/gradient plus
+  glow, square/outside, none, and re-enable transitions. A stress loop completed
+  100 cycles of three transitions (300 updates) without a crash or orphan
+  process. Five malformed width/order/apply-to packets were rejected with exit
+  status 1 while the daemon remained alive.
+- After the 300-update stress, `leaks` reported 0 leaks and 0 leaked bytes. This
+  host restricts live-process introspection, so that result is a smoke check,
+  not a substitute for a controlled long-run comparison.
+- In one active-only smoke sample, resident memory fell from 93,232 KiB to
+  22,944 KiB after inactive helper surfaces were removed; a later steady sample
+  was 22,752 KiB. These point samples confirm cleanup behavior but are not used
+  to claim a memory-slope fix.
+- A width `0.5`, HiDPI-on daemon run remained stable, and every test daemon was
+  stopped afterward.
+
+### Conditional outcomes
+
+| Item | Outcome |
+|---|---|
+| #106 / #83 / PR #191 | A concrete late-entry callback UAF was proven at code level and fixed with the token registry, inflight drain tests, ASan/UBSan, and TSan. The original end-to-end WindowServer/yabai symptom was not reproduced, so only the demonstrated lifecycle defect is claimed fixed. |
+| #128 | The short stress and active-only samples found no leak, but no two-hour equal-load baseline/fork RSS and WindowServer slope comparison was available. The issue-level claim remains deferred. |
+| #188 | Idle daemon CPU was 0.0% in sampled observations, but no trustworthy equal-load GPU counter was available. Deferred without a GPU claim. |
+| #173 | Fractional width plus HiDPI remained stable, but no deterministic pixel fixture reproduced the reported ghost box. Deferred. |
+| #166 | Zoom was not installed on the target host. Deferred without guessing at screen-sharing flags. |
+| #99 | No deterministic Dock-toggle reproduction was available, and the user's Dock was not restarted speculatively. Deferred. |
+
+The first fork CI run URL is appended after the initial push completes; the
+final delivered revision must also pass the same `macos-26` workflow.

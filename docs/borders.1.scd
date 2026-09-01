@@ -15,6 +15,10 @@ user windows on macOS 14.0+. It enhances the user experience by visually
 highlighting the currently focused window without relying on the accessibility
 API, thereby being faster than comparable tools.
 
+The upstream project targets macOS 14.0 and newer. Changes in this fork are
+validated on macOS 26.5.2; earlier releases are outside this fork's current
+verification boundary.
+
 # OPTIONS
 
 *style=<style>*
