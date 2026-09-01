@@ -18,7 +18,8 @@ API, thereby being faster than comparable tools.
 # OPTIONS
 
 *style=<style>*
-	Specifies the style of the border (either _round_, _square_ or _uniform_)
+	Specifies the style of the border (either _round_, _square_, _uniform_, or
+	_none_)
 
 *active_color=<color>*
 	Sets the border color for the focused window (format: _0xAARRGGBB_). For
@@ -68,7 +69,9 @@ could be issued.
 	Either _on_ or _off_.
 
 *<style>*
-	Either _round_, _square_, or _uniform_.
+	Either _round_, _square_, _uniform_, or _none_. The _none_ style disables
+	borders without stopping the running process, so a later style update can
+	enable them again.
 
 *<color>*
 	A color formatted as _0xAARRGGBB_, where _A_ is the alpha channel, _R_ the

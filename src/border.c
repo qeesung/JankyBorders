@@ -263,6 +263,10 @@ void border_create_window(struct border* border, CGRect frame, bool unmanaged, b
 
 void border_update_internal(struct border* border, struct settings* settings) {
   if (border->external_proxy_wid) return;
+  if (settings->border_style == BORDER_STYLE_NONE) {
+    border_hide(border);
+    return;
+  }
 
   int cid = border->cid;
   CGRect frame;

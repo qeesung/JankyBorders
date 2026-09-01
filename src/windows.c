@@ -39,7 +39,11 @@ bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid) {
   static char pid_name_buffer[PROC_PIDPATHINFO_MAXSIZE];
   proc_name(pid, pid_name_buffer, sizeof(pid_name_buffer));
 
-  if (pid == g_pid || !app_allowed(pid_name_buffer)) return false;
+  if (pid == g_pid
+      || g_settings.border_style == BORDER_STYLE_NONE
+      || !app_allowed(pid_name_buffer)) {
+    return false;
+  }
 
   CFArrayRef target_ref = cfarray_of_cfnumbers(&wid,
                                                sizeof(uint32_t),

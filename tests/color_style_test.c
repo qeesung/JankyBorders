@@ -116,6 +116,31 @@ int main(void) {
                 &previous_style,
                 sizeof(struct color_style)) == 0);
 
+  settings.border_style = BORDER_STYLE_ROUND;
+  char style_none[] = "style=none";
+  char* style_none_arguments[] = { style_none };
+  mask = parse_settings(&settings, 1, style_none_arguments);
+  assert(mask == BORDER_UPDATE_MASK_RECREATE_ALL);
+  assert(settings.border_style == BORDER_STYLE_NONE);
+
+  char style_round[] = "style=round";
+  char* style_round_arguments[] = { style_round };
+  mask = parse_settings(&settings, 1, style_round_arguments);
+  assert(mask == BORDER_UPDATE_MASK_RECREATE_ALL);
+  assert(settings.border_style == BORDER_STYLE_ROUND);
+
+  char style_uniform[] = "style=u";
+  char* style_uniform_arguments[] = { style_uniform };
+  mask = parse_settings(&settings, 1, style_uniform_arguments);
+  assert(mask == BORDER_UPDATE_MASK_ALL);
+  assert(settings.border_style == BORDER_STYLE_ROUND_UNIFORM);
+
+  char invalid_style[] = "style=banana";
+  char* invalid_style_arguments[] = { invalid_style };
+  mask = parse_settings(&settings, 1, invalid_style_arguments);
+  assert(mask == 0);
+  assert(settings.border_style == BORDER_STYLE_ROUND_UNIFORM);
+
   float a, r, g, b;
   colors_mix(0xffff0000, 0xff0000ff, &a, &r, &g, &b);
   assert_close(a, 1.0f);

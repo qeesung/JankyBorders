@@ -105,7 +105,7 @@ static bool parse_color_list(uint32_t colors[BORDER_SIDE_COUNT],
                              const char* token,
                              char terminator,
                              bool allow_per_edge) {
-  uint32_t parsed[BORDER_SIDE_COUNT] = {};
+  uint32_t parsed[BORDER_SIDE_COUNT] = {0};
   int count = 0;
   const char* cursor = token;
 
@@ -198,6 +198,32 @@ static bool parse_color(struct color_style* style,
   return false;
 }
 
+static bool parse_border_style(const char* argument, char* style) {
+  static const struct {
+    const char* name;
+    char value;
+  } styles[] = {
+    { "round", BORDER_STYLE_ROUND },
+    { "r", BORDER_STYLE_ROUND },
+    { "uniform", BORDER_STYLE_ROUND_UNIFORM },
+    { "u", BORDER_STYLE_ROUND_UNIFORM },
+    { "square", BORDER_STYLE_SQUARE },
+    { "s", BORDER_STYLE_SQUARE },
+    { "none", BORDER_STYLE_NONE },
+    { "n", BORDER_STYLE_NONE }
+  };
+
+  if (strncmp(argument, "style=", 6) != 0) return false;
+  const char* value = argument + 6;
+  for (size_t i = 0; i < sizeof(styles) / sizeof(styles[0]); i++) {
+    if (strcmp(value, styles[i].name) == 0) {
+      *style = styles[i].value;
+      return true;
+    }
+  }
+  return false;
+}
+
 static uint32_t parse_settings_internal(struct settings* settings,
                                         int count,
                                         char** arguments,
@@ -276,8 +302,18 @@ static uint32_t parse_settings_internal(struct settings* settings,
       else settings->border_order = BORDER_ORDER_BELOW;
       update_mask |= BORDER_UPDATE_MASK_ALL;
     }
-    else if (sscanf(arguments[i], "style=%c", &settings->border_style) == 1) {
-      update_mask |= BORDER_UPDATE_MASK_ALL;
+    else if (str_starts_with(arguments[i], "style=")) {
+      char style;
+      if (parse_border_style(arguments[i], &style)) {
+        bool recreate = settings->border_style == BORDER_STYLE_NONE
+                        || style == BORDER_STYLE_NONE;
+        settings->border_style = style;
+        update_mask |= recreate
+                       ? BORDER_UPDATE_MASK_RECREATE_ALL
+                       : BORDER_UPDATE_MASK_ALL;
+      } else {
+        printf("[?] Borders: Invalid argument '%s'\n", arguments[i]);
+      }
     }
     else if (strcmp(arguments[i], "hidpi=on") == 0) {
       update_mask |= BORDER_UPDATE_MASK_RECREATE_ALL;
