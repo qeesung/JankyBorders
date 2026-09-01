@@ -88,6 +88,7 @@ struct border {
   struct event_buffer event_buffer;
 
   bool is_proxy;
+  bool destroying;
   struct border* proxy;
   volatile uint32_t external_proxy_wid;
 
@@ -95,6 +96,7 @@ struct border {
 };
 
 struct border* border_create();
+bool border_init(struct border* border, int cid);
 void border_destroy(struct border* border);
 
 void border_move(struct border* border);

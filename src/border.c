@@ -552,35 +552,86 @@ update_cleanup:
   if (updates_disabled) SLSReenableUpdate(cid);
 }
 
-void border_init(struct border* border, int cid) {
+bool border_init(struct border* border, int cid) {
+  if (!border) return false;
   memset(border, 0, sizeof(struct border));
   pthread_mutexattr_t mattr;
-  pthread_mutexattr_init(&mattr);
-  pthread_mutexattr_settype(&mattr, PTHREAD_MUTEX_RECURSIVE);
-  pthread_mutex_init(&border->mutex, &mattr);
-  animation_init(&border->animation);
+  if (pthread_mutexattr_init(&mattr) != 0) return false;
+  bool mutex_ready = pthread_mutexattr_settype(&mattr,
+                                               PTHREAD_MUTEX_RECURSIVE) == 0
+                     && pthread_mutex_init(&border->mutex, &mattr) == 0;
+  pthread_mutexattr_destroy(&mattr);
+  if (!mutex_ready) return false;
+
+  if (!animation_init(&border->animation)) {
+    pthread_mutex_destroy(&border->mutex);
+    return false;
+  }
   if (cid) border->cid = cid;
   else border->cid = SLSMainConnectionID();
+  return true;
 }
 
 struct border* border_create() {
   struct border* border = malloc(sizeof(struct border));
   if (!border) return NULL;
-  border_init(border, SLSMainConnectionID());
+  if (!border_init(border, SLSMainConnectionID())) {
+    free(border);
+    return NULL;
+  }
   return border;
 }
 
+static bool border_destroy_now(struct border* border) {
+  if (!border) return true;
+
+  pthread_mutex_lock(&border->mutex);
+  border_hide(border);
+  struct border* proxy = border->proxy;
+  border->proxy = NULL;
+  if (proxy && !border_destroy_now(proxy)) {
+    border->proxy = proxy;
+    pthread_mutex_unlock(&border->mutex);
+    return false;
+  }
+
+  // Stop and drain callbacks before releasing any helper window or connection
+  // referenced by an animation payload.
+  if (!animation_destroy(&border->animation)) {
+    pthread_mutex_unlock(&border->mutex);
+    return false;
+  }
+  border_destroy_window(border);
+  if (!border->is_proxy && border->cid != SLSMainConnectionID()) {
+    SLSReleaseConnection(border->cid);
+  }
+  pthread_mutex_unlock(&border->mutex);
+  pthread_mutex_destroy(&border->mutex);
+  free(border);
+  return true;
+}
+
+static void border_destroy_retry(struct border* border) {
+  if (border_destroy_now(border)) return;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
+                 dispatch_get_main_queue(),
+                 ^{
+    border_destroy_retry(border);
+  });
+}
+
 void border_destroy(struct border* border) {
+  if (!border) return;
+  pthread_mutex_lock(&border->mutex);
+  if (border->destroying) {
+    pthread_mutex_unlock(&border->mutex);
+    return;
+  }
+  border->destroying = true;
+  pthread_mutex_unlock(&border->mutex);
   border_hide(border);
   dispatch_async(dispatch_get_main_queue(), ^{
-    pthread_mutex_lock(&border->mutex);
-    border_destroy_window(border);
-    if (border->proxy) border_destroy(border->proxy);
-    animation_stop(&border->animation);
-    if (!border->is_proxy && border->cid != SLSMainConnectionID())
-      SLSReleaseConnection(border->cid);
-    pthread_mutex_unlock(&border->mutex);
-    free(border);
+    border_destroy_retry(border);
   });
 }
 

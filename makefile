@@ -2,6 +2,7 @@ FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windo
 LIBS = -framework AppKit -framework CoreVideo -F/System/Library/PrivateFrameworks/ -framework SkyLight
 SAFETY_TEST_FILES = tests/safety_tests.c src/parse.c src/mach.c src/hashtable.c
 SANITIZER_FLAGS = -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer
+THREAD_SANITIZER_FLAGS = -fsanitize=thread -fno-omit-frame-pointer
 
 all: | bin
 	clang -std=c99 -O3 -g $(FILES) -o bin/borders $(LIBS)
@@ -33,6 +34,8 @@ test: | bin
 	./bin/geometry_test
 	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/space_recovery_test.c -o bin/space_recovery_test
 	./bin/space_recovery_test
+	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test -framework CoreVideo
+	./bin/animation_lifecycle_test
 
 test-sanitize: | bin
 	clang -std=c99 -Wall -Wextra -O1 -g $(SANITIZER_FLAGS) -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)
@@ -51,10 +54,16 @@ test-sanitize: | bin
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/geometry_test_sanitize
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/space_recovery_test.c -o bin/space_recovery_test_sanitize
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/space_recovery_test_sanitize
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test_sanitize -framework CoreVideo
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/animation_lifecycle_test_sanitize
+
+test-thread: | bin
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(THREAD_SANITIZER_FLAGS) tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test_tsan -framework CoreVideo
+	TSAN_OPTIONS=halt_on_error=1 ./bin/animation_lifecycle_test_tsan
 bin:
 	mkdir bin
 
 clean:
 	rm -rf bin
 
-.PHONY: all debug warnings asan test test-sanitize clean
+.PHONY: all debug warnings asan test test-sanitize test-thread clean

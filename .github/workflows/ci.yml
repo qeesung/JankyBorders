@@ -45,3 +45,6 @@ jobs:
 
       - name: Run sanitizer tests
         run: make test-sanitize
+
+      - name: Run lifecycle thread sanitizer test
+        run: make test-thread
