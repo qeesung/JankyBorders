@@ -179,5 +179,8 @@ Two independent full-diff reviews found no P0, P1, or P2 defect.
 | #166 | Zoom was not installed on the target host. Deferred without guessing at screen-sharing flags. |
 | #99 | No deterministic Dock-toggle reproduction was available, and the user's Dock was not restarted speculatively. Deferred. |
 
-The first fork CI run URL is appended after the initial push completes; the
-final delivered revision must also pass the same `macos-26` workflow.
+The first fork CI run completed successfully in 33 seconds with every build,
+unit, sanitizer, and thread-sanitizer step green in
+[GitHub Actions run 33486848953](https://github.com/qeesung/JankyBorders/actions/runs/33486848953).
+The final documentation-only revision must also pass the same `macos-26`
+workflow.
