@@ -86,7 +86,7 @@ static void message_handler(void* data, uint32_t len) {
   if (!mach_decode_arguments(data, len, &arguments, &argument_count)) return;
 
   if (!parse_settings_scope_is_valid(argument_count, arguments)) {
-    printf("[?] Borders: blacklist/whitelist cannot be applied to one window\n");
+    printf("[?] Borders: process-wide settings cannot be applied to one window\n");
     free(arguments);
     return;
   }
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
 
   if (!parse_settings_scope_is_valid(argc - 1, argv + 1)) {
     fprintf(stderr,
-            "[?] Borders: blacklist/whitelist cannot be applied to one window\n");
+            "[?] Borders: process-wide settings cannot be applied to one window\n");
     return EXIT_FAILURE;
   }
 

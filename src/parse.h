@@ -15,5 +15,6 @@ uint32_t parse_settings_override(struct settings* settings,
                                  int count,
                                  char** arguments);
 bool parse_settings_contains_global_filter(int count, char** arguments);
+bool parse_settings_contains_global_control(int count, char** arguments);
 uint32_t parse_settings_apply_target(int count, char** arguments);
 bool parse_settings_scope_is_valid(int count, char** arguments);

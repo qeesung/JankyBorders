@@ -2,6 +2,7 @@
 #include "active_only.h"
 #include "border.h"
 #include "hashtable.h"
+#include <errno.h>
 #include <stdlib.h>
 
 static bool str_starts_with(char* string, char* prefix) {
@@ -9,6 +10,23 @@ static bool str_starts_with(char* string, char* prefix) {
   if (strlen(string) < strlen(prefix)) return false;
   if (strncmp(prefix, string, strlen(prefix)) == 0) return true;
   return false;
+}
+
+static bool parse_u32_argument(const char* argument,
+                               const char* prefix,
+                               uint32_t* value) {
+  if (!argument || !prefix || !value) return false;
+  size_t prefix_length = strlen(prefix);
+  if (strncmp(argument, prefix, prefix_length) != 0) return false;
+
+  const char* number = argument + prefix_length;
+  if (*number < '0' || *number > '9') return false;
+  errno = 0;
+  char* end = NULL;
+  unsigned long parsed = strtoul(number, &end, 10);
+  if (errno != 0 || !end || *end != '\0' || parsed > UINT32_MAX) return false;
+  *value = (uint32_t)parsed;
+  return true;
 }
 
 static bool parse_list(struct table* list, char* token, bool* enabled) {
@@ -240,6 +258,7 @@ static uint32_t parse_settings_internal(struct settings* settings,
   uint32_t update_mask = 0;
   for (int i = 0; i < count; i++) {
     if (!arguments[i]) continue;
+    bool active_only = settings->active_only;
     if (str_starts_with(arguments[i], active_color)) {
       if (parse_color(&settings->active_window,
                       arguments[i] + strlen(active_color),
@@ -332,14 +351,20 @@ static uint32_t parse_settings_internal(struct settings* settings,
       settings->ax_focus = false;
       update_mask |= BORDER_UPDATE_MASK_SETTING;
     }
-    else if (active_only_parse_argument(arguments[i],
-                                        &settings->active_only)) {
-      if (global_controls) update_mask |= BORDER_UPDATE_MASK_RECREATE_ALL;
+    else if (active_only_parse_argument(arguments[i], &active_only)) {
+      if (global_controls) {
+        settings->active_only = active_only;
+        update_mask |= BORDER_UPDATE_MASK_RECREATE_ALL;
+      }
     }
     else if (str_starts_with(arguments[i], "apply-to=")) {
+      uint32_t apply_to = 0;
       if (global_controls
-          && sscanf(arguments[i], "apply-to=%u", &settings->apply_to) == 1) {
+          && parse_u32_argument(arguments[i], "apply-to=", &apply_to)) {
+        settings->apply_to = apply_to;
         update_mask |= BORDER_UPDATE_MASK_SETTING;
+      } else if (global_controls) {
+        printf("[?] Borders: Invalid argument '%s'\n", arguments[i]);
       }
     }
     else {
@@ -372,13 +397,24 @@ bool parse_settings_contains_global_filter(int count, char** arguments) {
   return false;
 }
 
+bool parse_settings_contains_global_control(int count, char** arguments) {
+  if (parse_settings_contains_global_filter(count, arguments)) return true;
+  if (count <= 0 || !arguments) return false;
+
+  for (int i = 0; i < count; ++i) {
+    bool enabled = false;
+    if (active_only_parse_argument(arguments[i], &enabled)) return true;
+  }
+  return false;
+}
+
 uint32_t parse_settings_apply_target(int count, char** arguments) {
   uint32_t apply_to = 0;
   if (count <= 0 || !arguments) return apply_to;
   for (int i = 0; i < count; ++i) {
     if (!arguments[i]) continue;
     uint32_t candidate = 0;
-    if (sscanf(arguments[i], "apply-to=%u", &candidate) == 1) {
+    if (parse_u32_argument(arguments[i], "apply-to=", &candidate)) {
       apply_to = candidate;
     }
   }
@@ -387,5 +423,5 @@ uint32_t parse_settings_apply_target(int count, char** arguments) {
 
 bool parse_settings_scope_is_valid(int count, char** arguments) {
   return parse_settings_apply_target(count, arguments) == 0
-         || !parse_settings_contains_global_filter(count, arguments);
+         || !parse_settings_contains_global_control(count, arguments);
 }

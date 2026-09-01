@@ -265,10 +265,24 @@ static void test_filter_scope(void) {
   assert(table_find(&g_blacklist, "Safari"));
   assert(!table_find(&g_blacklist, "Ghostty"));
   assert(parse_settings_contains_global_filter(3, override_arguments));
+  assert(parse_settings_contains_global_control(3, override_arguments));
   assert(parse_settings_apply_target(3, override_arguments) == 42);
   assert(!parse_settings_scope_is_valid(3, override_arguments));
   char* global_arguments[] = { "blacklist=Ghostty", "width=7" };
   assert(parse_settings_scope_is_valid(2, global_arguments));
+
+  char* active_only_override[] = { "active_only=on", "apply-to=42" };
+  assert(parse_settings_contains_global_control(2, active_only_override));
+  assert(!parse_settings_scope_is_valid(2, active_only_override));
+
+  struct settings local_override = { .active_only = false };
+  char* active_only_update[] = { "active_only=on" };
+  assert(parse_settings_override(&local_override, 1, active_only_update) == 0);
+  assert(!local_override.active_only);
+
+  char* invalid_apply_target[] = { "apply-to=42trailing" };
+  assert(parse_settings_apply_target(1, invalid_apply_target) == 0);
+  assert(parse_settings_scope_is_valid(1, invalid_apply_target));
 
   struct color_style original = {
     .stype = COLOR_STYLE_SOLID,
