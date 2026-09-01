@@ -4,8 +4,10 @@
 #include "sys/stat.h"
 #include <limits.h>
 #include "ApplicationServices/ApplicationServices.h"
+#include <errno.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define DELAY_ASYNC_EXEC_ON_MAIN_THREAD(delay, code) {\
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{\
@@ -77,8 +79,16 @@ static inline void execute_config_file(const char* name, const char* filename) {
   if (pid !=  0) return;
 
   alarm(60);
-  char* exec[] = { "/usr/bin/env", "sh", "-c", path, NULL };
-  exit(execvp(exec[0], exec));
+  char* direct_arguments[] = { path, NULL };
+  execv(path, direct_arguments);
+
+  // Preserve support for legacy config files without a shebang. Passing the
+  // path as an argument keeps spaces and shell metacharacters literal.
+  if (errno == ENOEXEC) {
+    char* shell_arguments[] = { "/bin/sh", path, NULL };
+    execv(shell_arguments[0], shell_arguments);
+  }
+  _exit(126);
 }
 
 static inline CFArrayRef cfarray_of_cfnumbers(const void* values,
