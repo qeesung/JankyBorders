@@ -1,4 +1,5 @@
 #include "parse.h"
+#include "active_only.h"
 #include "border.h"
 #include "hashtable.h"
 #include <stdlib.h>
@@ -330,6 +331,10 @@ static uint32_t parse_settings_internal(struct settings* settings,
     else if (strcmp(arguments[i], "ax_focus=off") == 0) {
       settings->ax_focus = false;
       update_mask |= BORDER_UPDATE_MASK_SETTING;
+    }
+    else if (active_only_parse_argument(arguments[i],
+                                        &settings->active_only)) {
+      if (global_controls) update_mask |= BORDER_UPDATE_MASK_RECREATE_ALL;
     }
     else if (str_starts_with(arguments[i], "apply-to=")) {
       if (global_controls

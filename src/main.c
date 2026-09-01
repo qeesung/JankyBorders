@@ -50,7 +50,8 @@ struct settings g_settings = { .enabled = true,
                                .hidpi = false,
                                .show_background = false,
                                .border_order = BORDER_ORDER_BELOW,
-                               .ax_focus = false                             };
+                               .ax_focus = false,
+                               .active_only = false                          };
 
 bool g_blacklist_enabled = false;
 struct table g_blacklist;

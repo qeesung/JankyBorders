@@ -1,4 +1,5 @@
 #include "windows.h"
+#include "active_only.h"
 #include "hashtable.h"
 #include "border.h"
 #include "misc/ax.h"
@@ -28,6 +29,40 @@ static bool app_allowed(char* app_name) {
   return true;
 }
 
+static uint32_t windows_active_window_id(int cid) {
+  return g_settings.ax_focus ? ax_get_front_window(cid) : get_front_window(cid);
+}
+
+static void windows_remove_all_except(struct table* windows, uint32_t wid) {
+  if (!g_settings.active_only) return;
+
+  bool removed_window = false;
+
+  for (int i = 0; i < windows->capacity; ++i) {
+    struct bucket** bucket = &windows->buckets[i];
+    while (*bucket) {
+      struct bucket* current = *bucket;
+      struct border* border = current->value;
+
+      if (border
+          && active_only_should_remove_window(g_settings.active_only,
+                                              border->target_wid,
+                                              wid)) {
+        *bucket = current->next;
+        free(current->key);
+        free(current);
+        --windows->count;
+        border_destroy(border);
+        removed_window = true;
+      } else {
+        bucket = &current->next;
+      }
+    }
+  }
+
+  if (removed_window) windows_update_notifications(windows);
+}
+
 bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid) {
   bool window_created = false;
   int cid = SLSMainConnectionID();
@@ -45,6 +80,12 @@ bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid) {
   if (pid == g_pid
       || g_settings.border_style == BORDER_STYLE_NONE
       || !app_allowed(pid_name_buffer)) {
+    return false;
+  }
+  if (g_settings.active_only
+      && !active_only_should_track_window(true,
+                                          wid,
+                                          windows_active_window_id(cid))) {
     return false;
   }
 
@@ -93,6 +134,7 @@ bool windows_window_create(struct table* windows, uint32_t wid, uint64_t sid) {
           border->inner_radius = radius + 1;
           border->target_wid = wid;
           border->sid = sid;
+          if (g_settings.active_only) border->focused = true;
           border_update(border, false);
           windows_update_notifications(windows);
         }
@@ -191,8 +233,10 @@ static bool windows_window_focus(struct table* windows, uint32_t wid) {
         struct border* border = bucket->value;
         if (border->focused && border->target_wid != wid) {
           border->focused = false;
-          border->needs_redraw = true;
-          border_update(border, true);
+          if (!g_settings.active_only) {
+            border->needs_redraw = true;
+            border_update(border, true);
+          }
         }
 
         if (!border->focused && border->target_wid == wid) {
@@ -279,9 +323,7 @@ void windows_update_notifications(struct table* windows) {
 
 void windows_determine_and_focus_active_window(struct table* windows) {
   int cid = SLSMainConnectionID();
-  uint32_t front_wid = g_settings.ax_focus
-                       ? ax_get_front_window(cid)
-                       : get_front_window(cid);
+  uint32_t front_wid = windows_active_window_id(cid);
 
   debug("Front window: %d\n", front_wid);
   if (!windows_window_focus(windows, front_wid)) {
@@ -292,11 +334,21 @@ void windows_determine_and_focus_active_window(struct table* windows) {
       windows_window_focus(windows, front_wid);
     }
   }
+  windows_remove_all_except(windows, front_wid);
 }
 
 void windows_draw_borders_on_current_spaces(struct table* windows) {
   debug("Space Change: Consistency check\n");
   int cid = SLSMainConnectionID();
+
+  // Space events are intentionally handled through the caller's delayed
+  // consistency pass. Native-fullscreen windows may still have their old SID
+  // when the event first arrives, so active-only must not refresh eagerly.
+  if (g_settings.active_only) {
+    windows_determine_and_focus_active_window(windows);
+    return;
+  }
+
   CFArrayRef displays = SLSCopyManagedDisplays(cid);
   if (!displays) return;
 
@@ -384,6 +436,12 @@ static bool append_space_id(uint64_t** space_list,
 
 void windows_add_existing_windows(struct table* windows) {
   int cid = SLSMainConnectionID();
+
+  if (g_settings.active_only) {
+    windows_determine_and_focus_active_window(windows);
+    return;
+  }
+
   uint64_t* space_list = NULL;
   size_t space_count = 0;
   size_t space_capacity = 0;

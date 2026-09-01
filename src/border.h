@@ -46,6 +46,7 @@ struct settings {
   bool show_background;
   int border_order;
   bool ax_focus;
+  bool active_only;
 };
 
 // Application filters have process-wide scope. Keep their owning tables out of

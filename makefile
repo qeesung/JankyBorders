@@ -21,6 +21,8 @@ test: | bin
 	./bin/config_path_test
 	clang -std=c99 -Wall -Wextra -O0 -g tests/config_exec_test.c -o bin/config_exec_test $(LIBS)
 	./bin/config_exec_test
+	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/test_active_only.c -o bin/test_active_only
+	./bin/test_active_only
 
 test-sanitize: | bin
 	clang -std=c99 -Wall -Wextra -O1 -g -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -Isrc $(SAFETY_TEST_FILES) -o bin/safety_tests_sanitize $(LIBS)
@@ -30,3 +32,5 @@ bin:
 
 clean:
 	rm -rf bin
+
+.PHONY: all debug asan test clean
