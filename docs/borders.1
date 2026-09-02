@@ -57,15 +57,20 @@ instance, active_color=0xff00ff00 creates a green border.\&
 .RS 4
 Controls automatic contrast colors for the focused window.\& The default
 \fIoff\fR preserves \fIactive_color\fR.\& \fIactive\fR samples pixels just inside each
-window edge and independently selects a black or white top, right, bottom,
-and left border.\& Inactive windows continue to use \fIinactive_color\fR.\&
+window edge and independently selects pure black or pure white for each
+edge.\& \fIfocus\fR instead uses \fI0xffe5484d\fR for bright window edges and
+\fI0xffe1e3e4\fR for dark window edges.\& Inactive windows continue to use
+\fIinactive_color\fR.\& A recommended local example is: borders
+adaptive_color=focus active_color=0xffe5484d width=5.\&0.\&
 .PP
-Sampling is event-driven after focus, window creation or unhide, resize, and
-the final Space-recovery attempt.\& Scrolling and video playback alone do not
-trigger a new sample.\& If permission is unavailable, capture fails, or an
-edge has insufficient valid pixels, that edge falls back to
-\fIactive_color\fR.\&
-This process-wide setting cannot be combined with \fIapply-to=<window-id>\fR.\&
+Both sampling modes require macOS screen-recording permission and are
+event-driven after focus, window creation or unhide, resize, and the final
+Space-recovery attempt.\& Scrolling and video playback alone do not trigger a
+new sample.\& An edge with insufficient valid pixels keeps its last sampled
+color, or falls back to \fIactive_color\fR if it has no cache.\& If permission
+is unavailable or a capture or analysis ultimately fails, the sampled cache
+is cleared and the border falls back to \fIactive_color\fR.\& This process-wide
+setting cannot be combined with \fIapply-to=<window-id>\fR.\&
 .PP
 .RE
 \fBinactive_color=<color>\fR
@@ -127,9 +132,9 @@ without starting a border instance or requesting Accessibility permission.\&
 \fB--request-screen-capture\fR
 .RS 4
 Explicitly asks macOS for the screen-recording permission used by
-\fIadaptive_color=active\fR.\& This utility exits without starting a border
-instance or requesting Accessibility permission.\& After granting access in
-System Settings, restart a running local service with
+\fIadaptive_color=active\fR and \fIadaptive_color=focus\fR.\& This utility exits
+without starting a border instance or requesting Accessibility permission.\&
+After granting access in System Settings, restart a running local service with
 \fImake service-restart\fR.\& The LaunchAgent never invokes this option at login.\&
 When using the Make target, install the signed app first; the target launches
 the app through LaunchServices so permission is attached to the service
@@ -158,7 +163,8 @@ Either \fIon\fR or \fIoff\fR.\&
 .RE
 \fB<mode>\fR
 .RS 4
-For \fIadaptive_color\fR, either \fIoff\fR (the default) or \fIactive\fR.\&
+For \fIadaptive_color\fR, either \fIoff\fR (the default), \fIactive\fR, or
+\fIfocus\fR.\&
 .PP
 .RE
 \fB<style>\fR

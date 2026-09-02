@@ -18,6 +18,8 @@
 
 #define ADAPTIVE_COLOR_BLACK UINT32_C(0xff000000)
 #define ADAPTIVE_COLOR_WHITE UINT32_C(0xffffffff)
+#define ADAPTIVE_COLOR_FOCUS_ON_LIGHT UINT32_C(0xffe5484d)
+#define ADAPTIVE_COLOR_FOCUS_ON_DARK UINT32_C(0xffe1e3e4)
 #define ADAPTIVE_COLOR_SIDE_MASK(side) ((uint8_t)(UINT8_C(1) << (side)))
 
 /* The order intentionally matches enum border_side in misc/drawing.h. */
@@ -36,6 +38,22 @@ enum adaptive_color_status {
   ADAPTIVE_COLOR_BUFFER_TOO_SMALL,
   ADAPTIVE_COLOR_SIZE_OVERFLOW,
 };
+
+/*
+ * A palette maps sampled background luminance to a border color. on_light is
+ * used for a light background and on_dark for a dark background. The lower
+ * and upper switch thresholds form a hysteresis band around initial_threshold.
+ */
+struct adaptive_color_palette {
+  uint32_t on_light;
+  uint32_t on_dark;
+  double initial_threshold;
+  double switch_to_on_light_threshold;
+  double switch_to_on_dark_threshold;
+};
+
+extern const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_BLACK_WHITE;
+extern const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_FOCUS;
 
 /*
  * valid_mask marks colors produced by a previous successful sample. Fallback
@@ -80,3 +98,28 @@ enum adaptive_color_status adaptive_color_analyze_bgra(
     const struct adaptive_color_cache* previous,
     const uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT],
     struct adaptive_color_result* result);
+
+/*
+ * Palette-aware entry point. A cached color participates in hysteresis only
+ * when it matches one of the supplied palette colors. An unknown cached color
+ * is discarded, so a fresh sample uses the initial threshold and an invalid
+ * side uses its configured fallback rather than stale palette state.
+ */
+enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
+    const uint8_t* pixels,
+    size_t pixels_size,
+    size_t width,
+    size_t height,
+    size_t bytes_per_row,
+    const struct adaptive_color_palette* palette,
+    const struct adaptive_color_cache* previous,
+    const uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT],
+    struct adaptive_color_result* result);
+
+/* Select one palette color for an already-computed linear-sRGB luminance. */
+enum adaptive_color_status adaptive_color_select(
+    const struct adaptive_color_palette* palette,
+    double luminance,
+    int has_previous,
+    uint32_t previous,
+    uint32_t* color);

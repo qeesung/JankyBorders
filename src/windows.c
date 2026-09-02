@@ -32,6 +32,19 @@ static bool adaptive_attempts_disabled;
 static bool adaptive_failure_logged;
 static bool adaptive_space_consistency_pass;
 
+static const struct adaptive_color_palette* windows_adaptive_palette(
+    enum adaptive_color_mode mode) {
+  switch (mode) {
+    case ADAPTIVE_COLOR_MODE_ACTIVE:
+      return &ADAPTIVE_COLOR_PALETTE_BLACK_WHITE;
+    case ADAPTIVE_COLOR_MODE_FOCUS:
+      return &ADAPTIVE_COLOR_PALETTE_FOCUS;
+    case ADAPTIVE_COLOR_MODE_OFF:
+      return NULL;
+  }
+  return NULL;
+}
+
 static uint64_t windows_adaptive_now_ns(void) {
   struct timespec now;
   if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
@@ -63,7 +76,8 @@ static bool windows_adaptive_token_is_current(
                      token,
                      border->target_wid,
                      border->adaptive_generation,
-                     g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_ACTIVE,
+                     adaptive_color_mode_is_enabled(
+                         g_settings.adaptive_color),
                      border->focused,
                      border->destroying);
   if (current_border) *current_border = matches ? border : NULL;
@@ -201,7 +215,7 @@ static void windows_adaptive_capture_complete(
 
 static void windows_adaptive_capture_pump(uint64_t serial) {
   if (!adaptive_pending.valid || adaptive_pending.serial != serial) return;
-  if (g_settings.adaptive_color != ADAPTIVE_COLOR_MODE_ACTIVE
+  if (!adaptive_color_mode_is_enabled(g_settings.adaptive_color)
       || adaptive_attempts_disabled) {
     adaptive_pending.valid = false;
     return;
@@ -228,11 +242,15 @@ static void windows_adaptive_capture_pump(uint64_t serial) {
 
   uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT];
   border_adaptive_fallback_colors(border, fallback);
+  const struct adaptive_color_palette* palette = windows_adaptive_palette(
+      g_settings.adaptive_color);
+  if (!palette) return;
   adaptive_capture_in_flight = true;
   adaptive_in_flight_request = request;
   adaptive_last_capture_start_ns = now;
   edge_sampler_capture(request.token.wid,
                        request.token.generation,
+                       palette,
                        &border->adaptive_color_cache,
                        fallback,
                        windows_adaptive_capture_complete,
@@ -253,7 +271,7 @@ static void windows_adaptive_schedule_pump(uint64_t serial,
 static void windows_adaptive_schedule_border(struct border* border,
                                              uint64_t debounce_ms) {
   if (!border
-      || g_settings.adaptive_color != ADAPTIVE_COLOR_MODE_ACTIVE
+      || !adaptive_color_mode_is_enabled(g_settings.adaptive_color)
       || adaptive_attempts_disabled
       || adaptive_space_consistency_pass
       || !border->focused
@@ -652,12 +670,13 @@ void windows_adaptive_refresh_active(struct table* windows) {
 void windows_adaptive_mode_changed(struct table* windows,
                                    enum adaptive_color_mode previous,
                                    enum adaptive_color_mode current) {
-  if (previous == current) return;
-  if (current == ADAPTIVE_COLOR_MODE_OFF) {
-    windows_adaptive_clear_all(windows);
-    return;
+  enum adaptive_color_mode_transition transition =
+      adaptive_color_mode_transition_for(previous, current);
+  if (transition == ADAPTIVE_COLOR_TRANSITION_NONE) return;
+  windows_adaptive_clear_all(windows);
+  if (transition == ADAPTIVE_COLOR_TRANSITION_RESET_AND_REFRESH) {
+    windows_adaptive_refresh_active(windows);
   }
-  windows_adaptive_refresh_active(windows);
 }
 
 void windows_adaptive_space_change_started(struct table* windows) {

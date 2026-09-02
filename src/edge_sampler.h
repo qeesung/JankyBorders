@@ -44,11 +44,13 @@ typedef void (*edge_sampler_callback)(const struct edge_sampler_result* result,
                                       void* context);
 
 // Captures a fixed-size BGRA/SDR frame for wid and analyzes its four edges.
-// previous and fallback are copied before this function returns, so callers do
-// not need to keep them alive. callback is always delivered on the main queue.
-// The caller owns context and must keep it alive until callback returns.
+// palette, previous, and fallback are copied before this function returns, so
+// callers do not need to keep them alive. callback is always delivered on the
+// main queue. The caller owns context and must keep it alive until callback
+// returns.
 void edge_sampler_capture(uint32_t wid,
                           uint64_t generation,
+                          const struct adaptive_color_palette* palette,
                           const struct adaptive_color_cache* previous,
                           const uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT],
                           edge_sampler_callback callback,

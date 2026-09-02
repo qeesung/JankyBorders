@@ -26,6 +26,11 @@ static void test_focus_switch_rejects_old_callback(void) {
   assert(adaptive_capture_token_matches(window_b, 20, 8, true, true, false));
 }
 
+static void test_palette_switch_rejects_old_callback(void) {
+  struct adaptive_capture_token stale = { .wid = 20, .generation = 8 };
+  assert(!adaptive_capture_token_matches(stale, 20, 9, true, true, false));
+}
+
 static void test_reused_window_id_needs_new_generation(void) {
   struct adaptive_capture_token stale = { .wid = 42, .generation = 3 };
   assert(!adaptive_capture_token_matches(stale, 42, 4, true, true, false));
@@ -54,6 +59,7 @@ static void test_cancel_and_generation_wrap(void) {
 int main(void) {
   test_newest_pending_request_wins();
   test_focus_switch_rejects_old_callback();
+  test_palette_switch_rejects_old_callback();
   test_reused_window_id_needs_new_generation();
   test_disabled_hidden_and_destroying_are_rejected();
   test_cancel_and_generation_wrap();

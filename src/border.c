@@ -263,7 +263,7 @@ static bool border_draw(struct border* border,
                                    ? settings->active_window
                                    : settings->inactive_window;
   if (border->focused
-      && g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_ACTIVE
+      && adaptive_color_mode_is_enabled(g_settings.adaptive_color)
       && border->adaptive_color_cache.valid_mask) {
     uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT];
     border_adaptive_fallback_colors(border, fallback);

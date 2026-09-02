@@ -29,7 +29,29 @@ struct color_style {
 enum adaptive_color_mode {
   ADAPTIVE_COLOR_MODE_OFF = 0,
   ADAPTIVE_COLOR_MODE_ACTIVE,
+  ADAPTIVE_COLOR_MODE_FOCUS,
 };
+
+static inline bool adaptive_color_mode_is_enabled(
+    enum adaptive_color_mode mode) {
+  return mode == ADAPTIVE_COLOR_MODE_ACTIVE
+         || mode == ADAPTIVE_COLOR_MODE_FOCUS;
+}
+
+enum adaptive_color_mode_transition {
+  ADAPTIVE_COLOR_TRANSITION_NONE = 0,
+  ADAPTIVE_COLOR_TRANSITION_RESET,
+  ADAPTIVE_COLOR_TRANSITION_RESET_AND_REFRESH,
+};
+
+static inline enum adaptive_color_mode_transition
+adaptive_color_mode_transition_for(enum adaptive_color_mode previous,
+                                   enum adaptive_color_mode current) {
+  if (previous == current) return ADAPTIVE_COLOR_TRANSITION_NONE;
+  return adaptive_color_mode_is_enabled(current)
+         ? ADAPTIVE_COLOR_TRANSITION_RESET_AND_REFRESH
+         : ADAPTIVE_COLOR_TRANSITION_RESET;
+}
 
 struct settings {
   bool enabled;

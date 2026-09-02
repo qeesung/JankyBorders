@@ -161,25 +161,31 @@ borders "${options[@]}"
 
 #### Adapting the focused border to window-edge colors
 
-Adaptive color is disabled by default. Enable it process-wide with:
+Adaptive color is disabled by default. It provides two process-wide sampling
+modes. `active` keeps the high-contrast behavior and independently chooses
+pure black or pure white for each edge. `focus` uses `0xffe5484d` for bright
+window edges and `0xffe1e3e4` for dark window edges, giving the focused window
+a recognizable red-and-light-gray palette. Inactive borders continue to use
+`inactive_color`.
+
+For a comfortable local focus ring, use:
 
 ```bash
-borders adaptive_color=active
+borders adaptive_color=focus active_color=0xffe5484d width=5.0
 ```
 
-For the focused window, JankyBorders samples pixels just inside each window
-edge and independently chooses a black or white top, right, bottom, and left
-border for contrast. Inactive borders continue to use `inactive_color`.
 `adaptive_color` is a process-wide setting and cannot be combined with
 `apply-to=<window-id>`.
 
-Sampling is event-driven: it runs after focus, window creation or unhide,
-resize, and the final Space-recovery attempt. It intentionally does not capture
-continuously, so scrolling and video playback alone do not update the border.
-If permission is unavailable, capture fails, or an edge has insufficient valid
-pixels, that edge falls back to `active_color`.
+Both sampling modes are event-driven: they run after focus, window creation or
+unhide, resize, and the final Space-recovery attempt. They intentionally do not
+capture continuously, so scrolling and video playback alone do not update the
+border. An edge with insufficient valid pixels keeps its last sampled color,
+or falls back to `active_color` if it has no cache. If permission is unavailable
+or a capture or analysis ultimately fails, the sampled cache is cleared and
+the border falls back to `active_color`.
 
-Adaptive sampling requires macOS screen-recording permission. The user service
+Both sampling modes require macOS screen-recording permission. The user service
 never opens the permission prompt at login. Check or request permission
 explicitly after `make install-service`, then restart the service after
 granting it in System Settings. These Make targets deliberately execute the

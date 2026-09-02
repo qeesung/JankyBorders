@@ -8,6 +8,22 @@
   ((ADAPTIVE_COLOR_IMAGE_WIDTH - 2u * ADAPTIVE_COLOR_ENDPOINT_SKIP) \
    * ADAPTIVE_COLOR_INNER_DEPTH)
 
+const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_BLACK_WHITE = {
+  .on_light = ADAPTIVE_COLOR_BLACK,
+  .on_dark = ADAPTIVE_COLOR_WHITE,
+  .initial_threshold = ADAPTIVE_COLOR_INITIAL_THRESHOLD,
+  .switch_to_on_light_threshold = ADAPTIVE_COLOR_SWITCH_TO_BLACK_THRESHOLD,
+  .switch_to_on_dark_threshold = ADAPTIVE_COLOR_SWITCH_TO_WHITE_THRESHOLD,
+};
+
+const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_FOCUS = {
+  .on_light = ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
+  .on_dark = ADAPTIVE_COLOR_FOCUS_ON_DARK,
+  .initial_threshold = 0.417738520,
+  .switch_to_on_light_threshold = 0.46,
+  .switch_to_on_dark_threshold = 0.38,
+};
+
 struct adaptive_color_region {
   size_t x_begin;
   size_t x_end;
@@ -78,22 +94,49 @@ static double median_luminance(double* samples, size_t sample_count) {
   return (samples[middle - 1u] + samples[middle]) / 2.0;
 }
 
-static uint32_t select_contrast_color(double luminance,
-                                      int has_previous,
-                                      uint32_t previous) {
-  if (has_previous && previous == ADAPTIVE_COLOR_WHITE) {
-    return luminance >= ADAPTIVE_COLOR_SWITCH_TO_BLACK_THRESHOLD
-           ? ADAPTIVE_COLOR_BLACK
-           : ADAPTIVE_COLOR_WHITE;
+static int adaptive_color_palette_is_valid(
+    const struct adaptive_color_palette* palette) {
+  return palette
+         && palette->on_light != palette->on_dark
+         && isfinite(palette->initial_threshold)
+         && isfinite(palette->switch_to_on_light_threshold)
+         && isfinite(palette->switch_to_on_dark_threshold)
+         && palette->switch_to_on_dark_threshold >= 0.0
+         && palette->switch_to_on_dark_threshold
+            <= palette->initial_threshold
+         && palette->initial_threshold
+            <= palette->switch_to_on_light_threshold
+         && palette->switch_to_on_light_threshold <= 1.0;
+}
+
+enum adaptive_color_status adaptive_color_select(
+    const struct adaptive_color_palette* palette,
+    double luminance,
+    int has_previous,
+    uint32_t previous,
+    uint32_t* color) {
+  if (!adaptive_color_palette_is_valid(palette)
+      || !color
+      || !isfinite(luminance)
+      || luminance < 0.0
+      || luminance > 1.0) {
+    return ADAPTIVE_COLOR_INVALID_ARGUMENT;
   }
-  if (has_previous && previous == ADAPTIVE_COLOR_BLACK) {
-    return luminance <= ADAPTIVE_COLOR_SWITCH_TO_WHITE_THRESHOLD
-           ? ADAPTIVE_COLOR_WHITE
-           : ADAPTIVE_COLOR_BLACK;
+
+  if (has_previous && previous == palette->on_dark) {
+    *color = luminance >= palette->switch_to_on_light_threshold
+             ? palette->on_light
+             : palette->on_dark;
+  } else if (has_previous && previous == palette->on_light) {
+    *color = luminance <= palette->switch_to_on_dark_threshold
+             ? palette->on_dark
+             : palette->on_light;
+  } else {
+    *color = luminance >= palette->initial_threshold
+             ? palette->on_light
+             : palette->on_dark;
   }
-  return luminance >= ADAPTIVE_COLOR_INITIAL_THRESHOLD
-         ? ADAPTIVE_COLOR_BLACK
-         : ADAPTIVE_COLOR_WHITE;
+  return ADAPTIVE_COLOR_OK;
 }
 
 static enum adaptive_color_status validate_layout(const uint8_t* pixels,
@@ -121,12 +164,13 @@ static enum adaptive_color_status validate_layout(const uint8_t* pixels,
   return ADAPTIVE_COLOR_OK;
 }
 
-enum adaptive_color_status adaptive_color_analyze_bgra(
+enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
     const uint8_t* pixels,
     size_t pixels_size,
     size_t width,
     size_t height,
     size_t bytes_per_row,
+    const struct adaptive_color_palette* palette,
     const struct adaptive_color_cache* previous,
     const uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT],
     struct adaptive_color_result* result) {
@@ -138,6 +182,9 @@ enum adaptive_color_status adaptive_color_analyze_bgra(
                                                        fallback,
                                                        result);
   if (status != ADAPTIVE_COLOR_OK) return status;
+  if (!adaptive_color_palette_is_valid(palette)) {
+    return ADAPTIVE_COLOR_INVALID_ARGUMENT;
+  }
 
   uint32_t fallback_copy[ADAPTIVE_COLOR_SIDE_COUNT];
   memcpy(fallback_copy, fallback, sizeof(fallback_copy));
@@ -145,6 +192,14 @@ enum adaptive_color_status adaptive_color_analyze_bgra(
   struct adaptive_color_cache previous_copy = { 0 };
   if (previous) previous_copy = *previous;
   previous_copy.valid_mask &= (uint8_t)((1u << ADAPTIVE_COLOR_SIDE_COUNT) - 1u);
+  for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+    uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
+    if ((previous_copy.valid_mask & side_mask)
+        && previous_copy.colors[side] != palette->on_light
+        && previous_copy.colors[side] != palette->on_dark) {
+      previous_copy.valid_mask &= (uint8_t)~side_mask;
+    }
+  }
 
   struct adaptive_color_result next = { 0 };
   next.cache_mask = previous_copy.valid_mask;
@@ -193,10 +248,13 @@ enum adaptive_color_status adaptive_color_analyze_bgra(
     double luminance = median_luminance(samples, sample_count);
     uint32_t old_effective_color = next.colors[side];
     next.luminance[side] = luminance;
-    next.colors[side] = select_contrast_color(
+    status = adaptive_color_select(
+        palette,
         luminance,
         (previous_copy.valid_mask & side_mask) != 0,
-        previous_copy.colors[side]);
+        previous_copy.colors[side],
+        &next.colors[side]);
+    if (status != ADAPTIVE_COLOR_OK) return status;
     next.sampled_mask |= side_mask;
     next.cache_mask |= side_mask;
     if (next.colors[side] != old_effective_color) {
@@ -206,4 +264,25 @@ enum adaptive_color_status adaptive_color_analyze_bgra(
 
   *result = next;
   return ADAPTIVE_COLOR_OK;
+}
+
+enum adaptive_color_status adaptive_color_analyze_bgra(
+    const uint8_t* pixels,
+    size_t pixels_size,
+    size_t width,
+    size_t height,
+    size_t bytes_per_row,
+    const struct adaptive_color_cache* previous,
+    const uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT],
+    struct adaptive_color_result* result) {
+  return adaptive_color_analyze_bgra_with_palette(
+      pixels,
+      pixels_size,
+      width,
+      height,
+      bytes_per_row,
+      &ADAPTIVE_COLOR_PALETTE_BLACK_WHITE,
+      previous,
+      fallback,
+      result);
 }

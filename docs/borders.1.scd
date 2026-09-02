@@ -43,14 +43,20 @@ verification boundary.
 *adaptive_color=<mode>*
 	Controls automatic contrast colors for the focused window. The default
 	_off_ preserves _active_color_. _active_ samples pixels just inside each
-	window edge and independently selects a black or white top, right, bottom,
-	and left border. Inactive windows continue to use _inactive_color_.
+	window edge and independently selects pure black or pure white for each
+	edge. _focus_ instead uses _0xffe5484d_ for bright window edges and
+	_0xffe1e3e4_ for dark window edges. Inactive windows continue to use
+	_inactive_color_. A recommended local example is: borders
+	adaptive_color=focus active_color=0xffe5484d width=5.0.
 
-	Sampling is event-driven after focus, window creation or unhide, resize, and
-	the final Space-recovery attempt. Scrolling and video playback alone do not
-	trigger a new sample. If permission is unavailable, capture fails, or an
-	edge has insufficient valid pixels, that edge falls back to _active_color_.
-	This process-wide setting cannot be combined with _apply-to=<window-id>_.
+	Both sampling modes require macOS screen-recording permission and are
+	event-driven after focus, window creation or unhide, resize, and the final
+	Space-recovery attempt. Scrolling and video playback alone do not trigger a
+	new sample. An edge with insufficient valid pixels keeps its last sampled
+	color, or falls back to _active_color_ if it has no cache. If permission is
+	unavailable or a capture or analysis ultimately fails, the sampled cache is
+	cleared and the border falls back to _active_color_. This process-wide setting
+	cannot be combined with _apply-to=<window-id>_.
 
 *inactive_color=<color>*
 	Sets the border color for all windows not in focus.
@@ -92,9 +98,9 @@ verification boundary.
 
 *--request-screen-capture*
 	Explicitly asks macOS for the screen-recording permission used by
-	_adaptive_color=active_. This utility exits without starting a border
-	instance or requesting Accessibility permission. After granting access in
-	System Settings, restart a running local service with
+	_adaptive_color=active_ and _adaptive_color=focus_. This utility exits
+	without starting a border instance or requesting Accessibility permission.
+	After granting access in System Settings, restart a running local service with
 	_make service-restart_. The LaunchAgent never invokes this option at login.
 	When using the Make target, install the signed app first; the target launches
 	the app through LaunchServices so permission is attached to the service
@@ -117,7 +123,8 @@ $HOME/.config/borders/bordersrc, or the legacy $HOME/.bordersrc path.
 	Either _on_ or _off_.
 
 *<mode>*
-	For _adaptive_color_, either _off_ (the default) or _active_.
+	For _adaptive_color_, either _off_ (the default), _active_, or
+	_focus_.
 
 *<style>*
 	Either _round_, _square_, _uniform_, or _none_. The _none_ style disables

@@ -422,6 +422,12 @@ static uint32_t parse_settings_internal(struct settings* settings,
         update_mask |= BORDER_UPDATE_MASK_ADAPTIVE;
       }
     }
+    else if (strcmp(arguments[i], "adaptive_color=focus") == 0) {
+      if (global_controls) {
+        settings->adaptive_color = ADAPTIVE_COLOR_MODE_FOCUS;
+        update_mask |= BORDER_UPDATE_MASK_ADAPTIVE;
+      }
+    }
     else if (strcmp(arguments[i], "adaptive_color=off") == 0) {
       if (global_controls) {
         settings->adaptive_color = ADAPTIVE_COLOR_MODE_OFF;

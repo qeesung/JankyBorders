@@ -11,6 +11,7 @@
 struct edge_sampler_request {
   uint32_t wid;
   uint64_t generation;
+  struct adaptive_color_palette palette;
   struct adaptive_color_cache previous;
   uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT];
   edge_sampler_callback callback;
@@ -114,12 +115,13 @@ static void edge_sampler_process_image(
   result.frame.width = width;
   result.frame.height = height;
   result.frame.bytes_per_row = bytes_per_row;
-  result.analysis_status = adaptive_color_analyze_bgra(
+  result.analysis_status = adaptive_color_analyze_bgra_with_palette(
       CFDataGetBytePtr(pixels),
       (size_t)CFDataGetLength(pixels),
       width,
       height,
       bytes_per_row,
+      &request->palette,
       &request->previous,
       request->fallback,
       &result.analysis);
@@ -176,6 +178,7 @@ static void edge_sampler_capture_window(
 
 void edge_sampler_capture(uint32_t wid,
                           uint64_t generation,
+                          const struct adaptive_color_palette* palette,
                           const struct adaptive_color_cache* previous,
                           const uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT],
                           edge_sampler_callback callback,
@@ -188,10 +191,11 @@ void edge_sampler_capture(uint32_t wid,
   request.generation = generation;
   request.callback = callback;
   request.context = context;
+  request.palette = palette ? *palette : ADAPTIVE_COLOR_PALETTE_BLACK_WHITE;
   if (previous) request.previous = *previous;
   for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
     request.fallback[side] = fallback ? fallback[side]
-                                      : ADAPTIVE_COLOR_WHITE;
+                                      : request.palette.on_dark;
   }
 
   if (@available(macOS 14.0, *)) {
