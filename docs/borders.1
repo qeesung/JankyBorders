@@ -58,19 +58,26 @@ instance, active_color=0xff00ff00 creates a green border.\&
 Controls automatic contrast colors for the focused window.\& The default
 \fIoff\fR preserves \fIactive_color\fR.\& \fIactive\fR samples pixels just inside each
 window edge and independently selects pure black or pure white for each
-edge.\& \fIfocus\fR instead uses \fI0xffe5484d\fR for bright window edges and
-\fI0xffe1e3e4\fR for dark window edges.\& Inactive windows continue to use
-\fIinactive_color\fR.\& A recommended local example is: borders
+edge.\& \fIfocus\fR instead combines luminance from all usable edges and applies
+one color to the entire focused ring: \fI0xffe5484d\fR (#E5484D) when the window
+edge is bright overall, or \fI0xffe1e3e4\fR (#E1E3E4) when it is dark overall.\&
+The four edges never mix red and gray-white in \fIfocus\fR mode.\&
+Inactive windows continue to use \fIinactive_color\fR.\& A recommended local
+example is: borders
 adaptive_color=focus active_color=0xffe5484d width=5.\&0.\&
 .PP
 Both sampling modes require macOS screen-recording permission and are
 event-driven after focus, window creation or unhide, resize, and the final
 Space-recovery attempt.\& Scrolling and video playback alone do not trigger a
-new sample.\& An edge with insufficient valid pixels keeps its last sampled
-color, or falls back to \fIactive_color\fR if it has no cache.\& If permission
-is unavailable or a capture or analysis ultimately fails, the sampled cache
-is cleared and the border falls back to \fIactive_color\fR.\& This process-wide
-setting cannot be combined with \fIapply-to=<window-id>\fR.\&
+new sample.\& In \fIfocus\fR mode, invalid edges are excluded and the remaining
+usable edges still produce one color for the whole ring.\& If no edge is usable,
+the ring keeps its previous consistent \fIfocus\fR color when available;
+otherwise the entire ring falls back uniformly to \fIactive_color\fR.\& If
+permission is unavailable or a capture or analysis ultimately fails, the
+sampled cache is cleared and the entire ring falls back uniformly to
+\fIactive_color\fR.\& This fallback uses the first color from a multi-edge
+\fIactive_color\fR, or the midpoint of a gradient.\& This process-wide setting
+cannot be combined with \fIapply-to=<window-id>\fR.\&
 .PP
 .RE
 \fBinactive_color=<color>\fR

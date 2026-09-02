@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -43,6 +44,8 @@ enum adaptive_color_status {
  * A palette maps sampled background luminance to a border color. on_light is
  * used for a light background and on_dark for a dark background. The lower
  * and upper switch thresholds form a hysteresis band around initial_threshold.
+ * A uniform palette resolves one color from the median of the valid edge
+ * luminances and applies that color to the complete border.
  */
 struct adaptive_color_palette {
   uint32_t on_light;
@@ -50,6 +53,7 @@ struct adaptive_color_palette {
   double initial_threshold;
   double switch_to_on_light_threshold;
   double switch_to_on_dark_threshold;
+  bool uniform;
 };
 
 extern const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_BLACK_WHITE;

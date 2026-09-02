@@ -163,10 +163,11 @@ borders "${options[@]}"
 
 Adaptive color is disabled by default. It provides two process-wide sampling
 modes. `active` keeps the high-contrast behavior and independently chooses
-pure black or pure white for each edge. `focus` uses `0xffe5484d` for bright
-window edges and `0xffe1e3e4` for dark window edges, giving the focused window
-a recognizable red-and-light-gray palette. Inactive borders continue to use
-`inactive_color`.
+pure black or pure white for each edge. `focus` combines the luminance from all
+usable edges and applies one color to the entire focused ring: `0xffe5484d`
+(#E5484D) when the window edge is bright overall, or `0xffe1e3e4` (#E1E3E4)
+when it is dark overall. The four edges never mix red and gray-white in
+`focus` mode. Inactive borders continue to use `inactive_color`.
 
 For a comfortable local focus ring, use:
 
@@ -180,10 +181,14 @@ borders adaptive_color=focus active_color=0xffe5484d width=5.0
 Both sampling modes are event-driven: they run after focus, window creation or
 unhide, resize, and the final Space-recovery attempt. They intentionally do not
 capture continuously, so scrolling and video playback alone do not update the
-border. An edge with insufficient valid pixels keeps its last sampled color,
-or falls back to `active_color` if it has no cache. If permission is unavailable
+border. In `focus` mode, invalid edges are excluded and the remaining usable
+edges still produce one color for the whole ring. If no edge is usable, the
+ring keeps its previous consistent `focus` color when available; otherwise the
+entire ring falls back uniformly to `active_color`. If permission is unavailable
 or a capture or analysis ultimately fails, the sampled cache is cleared and
-the border falls back to `active_color`.
+the entire ring falls back uniformly to `active_color`. A multi-edge
+`active_color` uses its first color for this fallback; a gradient uses its
+midpoint color.
 
 Both sampling modes require macOS screen-recording permission. The user service
 never opens the permission prompt at login. Check or request permission

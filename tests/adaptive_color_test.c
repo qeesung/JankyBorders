@@ -133,11 +133,13 @@ static void test_builtin_palettes_and_focus_selector(void) {
   assert(black_white->on_light == ADAPTIVE_COLOR_BLACK);
   assert(black_white->on_dark == ADAPTIVE_COLOR_WHITE);
   assert(black_white->initial_threshold == ADAPTIVE_COLOR_INITIAL_THRESHOLD);
+  assert(!black_white->uniform);
   assert(focus->on_light == UINT32_C(0xffe5484d));
   assert(focus->on_dark == UINT32_C(0xffe1e3e4));
   assert(fabs(focus->initial_threshold - 0.417738520) < 0.000000001);
   assert(focus->switch_to_on_light_threshold == 0.46);
   assert(focus->switch_to_on_dark_threshold == 0.38);
+  assert(focus->uniform);
 
   assert(adaptive_color_select(focus,
                                focus->initial_threshold - 0.000001,
@@ -194,22 +196,36 @@ static void test_focus_palette_on_uniform_and_mixed_edges(void) {
   assert(analyze_with_palette(&image, focus, NULL, &result)
          == ADAPTIVE_COLOR_OK);
   assert(result.sampled_mask == ALL_SIDES_MASK);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_TOP] == focus->on_dark);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_RIGHT] == focus->on_light);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_BOTTOM] == focus->on_dark);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_LEFT] == focus->on_light);
+  assert(result.cache_mask == ALL_SIDES_MASK);
+  /* Median(0, 0, 1, 1) is 0.5, so the complete border uses on_light. */
+  assert_all_colors(&result, focus->on_light);
 }
 
-static void test_focus_palette_hysteresis_uses_previous_cache(void) {
+static void test_focus_palette_partial_sample_colors_full_border(void) {
+  struct test_image image;
+  struct adaptive_color_result result;
+  const struct adaptive_color_palette* focus = &ADAPTIVE_COLOR_PALETTE_FOCUS;
+
+  fill_image(&image, 0, 0, 0, 0);
+  fill_side(&image, ADAPTIVE_COLOR_SIDE_TOP, 0, 255);
+  assert(analyze_with_palette(&image, focus, NULL, &result)
+         == ADAPTIVE_COLOR_OK);
+  assert(result.sampled_mask
+         == ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_TOP));
+  assert(result.cache_mask == ALL_SIDES_MASK);
+  assert_all_colors(&result, focus->on_dark);
+}
+
+static void test_focus_palette_hysteresis_uses_uniform_previous_cache(void) {
   struct test_image image;
   struct adaptive_color_result result;
   const struct adaptive_color_palette* focus = &ADAPTIVE_COLOR_PALETTE_FOCUS;
   struct adaptive_color_cache previous = {
     .colors = {
       ADAPTIVE_COLOR_FOCUS_ON_DARK,
-      ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
       ADAPTIVE_COLOR_FOCUS_ON_DARK,
-      ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
     },
     .valid_mask = ALL_SIDES_MASK,
   };
@@ -221,53 +237,77 @@ static void test_focus_palette_hysteresis_uses_previous_cache(void) {
   for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
     assert(result.luminance[side] > focus->switch_to_on_dark_threshold);
     assert(result.luminance[side] < focus->switch_to_on_light_threshold);
-    assert(result.colors[side] == previous.colors[side]);
   }
+  assert_all_colors(&result, focus->on_dark);
+  assert(result.cache_mask == ALL_SIDES_MASK);
   assert(result.changed_mask == 0);
 
-  fill_side(&image, ADAPTIVE_COLOR_SIDE_TOP, 181, 255);
-  fill_side(&image, ADAPTIVE_COLOR_SIDE_RIGHT, 165, 255);
+  fill_image(&image, 181, 181, 181, 255);
   assert(analyze_with_palette(&image, focus, &previous, &result)
          == ADAPTIVE_COLOR_OK);
-  assert(result.luminance[ADAPTIVE_COLOR_SIDE_TOP]
-         > focus->switch_to_on_light_threshold);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_TOP] == focus->on_light);
-  assert(result.luminance[ADAPTIVE_COLOR_SIDE_RIGHT]
-         < focus->switch_to_on_dark_threshold);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_RIGHT] == focus->on_dark);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_BOTTOM] == focus->on_dark);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_LEFT] == focus->on_light);
-  assert(result.changed_mask
-         == (ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_TOP)
-             | ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_RIGHT)));
+  assert_all_colors(&result, focus->on_light);
+  assert(result.changed_mask == ALL_SIDES_MASK);
+
+  for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+    previous.colors[side] = focus->on_light;
+  }
+  fill_image(&image, 170, 170, 170, 255);
+  assert(analyze_with_palette(&image, focus, &previous, &result)
+         == ADAPTIVE_COLOR_OK);
+  assert_all_colors(&result, focus->on_light);
+  assert(result.changed_mask == 0);
 }
 
-static void test_focus_palette_fallback_and_stale_cache_filtering(void) {
+static void test_focus_palette_fallback_and_invalid_cache_filtering(void) {
   struct test_image image;
   struct adaptive_color_result result;
   const struct adaptive_color_palette* focus = &ADAPTIVE_COLOR_PALETTE_FOCUS;
   fill_image(&image, 0, 0, 0, 0);
 
-  struct adaptive_color_cache focus_previous = {
+  struct adaptive_color_cache uniform_previous = {
+    .colors = {
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
+    },
+    .valid_mask = ALL_SIDES_MASK,
+  };
+  assert(analyze_with_palette(&image, focus, &uniform_previous, &result)
+         == ADAPTIVE_COLOR_OK);
+  assert(result.sampled_mask == 0);
+  assert(result.cache_mask == ALL_SIDES_MASK);
+  assert_all_colors(&result, focus->on_light);
+
+  struct adaptive_color_cache mixed_previous = {
     .colors = {
       ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
       ADAPTIVE_COLOR_FOCUS_ON_DARK,
-      0,
-      0,
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
     },
-    .valid_mask = ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_TOP)
-                  | ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_RIGHT),
+    .valid_mask = ALL_SIDES_MASK,
   };
-  assert(analyze_with_palette(&image, focus, &focus_previous, &result)
+  assert(analyze_with_palette(&image, focus, &mixed_previous, &result)
          == ADAPTIVE_COLOR_OK);
   assert(result.sampled_mask == 0);
-  assert(result.cache_mask == focus_previous.valid_mask);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_TOP] == focus->on_light);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_RIGHT] == focus->on_dark);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_BOTTOM]
-         == fallback_colors[ADAPTIVE_COLOR_SIDE_BOTTOM]);
-  assert(result.colors[ADAPTIVE_COLOR_SIDE_LEFT]
-         == fallback_colors[ADAPTIVE_COLOR_SIDE_LEFT]);
+  assert(result.cache_mask == 0);
+  assert_all_colors(&result, fallback_colors[0]);
+
+  struct adaptive_color_cache partial_previous = uniform_previous;
+  partial_previous.valid_mask =
+      ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_TOP);
+  assert(analyze_with_palette(&image, focus, &partial_previous, &result)
+         == ADAPTIVE_COLOR_OK);
+  assert(result.cache_mask == 0);
+  assert_all_colors(&result, fallback_colors[0]);
+
+  struct adaptive_color_cache extra_bits_previous = uniform_previous;
+  extra_bits_previous.valid_mask = ALL_SIDES_MASK | UINT8_C(0x80);
+  assert(analyze_with_palette(&image, focus, &extra_bits_previous, &result)
+         == ADAPTIVE_COLOR_OK);
+  assert(result.cache_mask == 0);
+  assert_all_colors(&result, fallback_colors[0]);
 
   struct adaptive_color_cache black_white_previous = {
     .colors = {
@@ -281,9 +321,15 @@ static void test_focus_palette_fallback_and_stale_cache_filtering(void) {
   assert(analyze_with_palette(&image, focus, &black_white_previous, &result)
          == ADAPTIVE_COLOR_OK);
   assert(result.cache_mask == 0);
-  for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
-    assert(result.colors[side] == fallback_colors[side]);
-  }
+  assert_all_colors(&result, fallback_colors[0]);
+
+  /* A mixed cache cannot influence hysteresis when fresh samples arrive. */
+  fill_image(&image, 170, 170, 170, 255);
+  assert(analyze_with_palette(&image, focus, &mixed_previous, &result)
+         == ADAPTIVE_COLOR_OK);
+  assert(result.sampled_mask == ALL_SIDES_MASK);
+  assert(result.cache_mask == ALL_SIDES_MASK);
+  assert_all_colors(&result, focus->on_dark);
 }
 
 static void test_black_and_white_images_choose_maximum_contrast(void) {
@@ -627,8 +673,9 @@ static void test_fallback_may_alias_result_storage(void) {
 int main(void) {
   test_builtin_palettes_and_focus_selector();
   test_focus_palette_on_uniform_and_mixed_edges();
-  test_focus_palette_hysteresis_uses_previous_cache();
-  test_focus_palette_fallback_and_stale_cache_filtering();
+  test_focus_palette_partial_sample_colors_full_border();
+  test_focus_palette_hysteresis_uses_uniform_previous_cache();
+  test_focus_palette_fallback_and_invalid_cache_filtering();
   test_black_and_white_images_choose_maximum_contrast();
   test_sides_are_sampled_independently_in_drawing_order();
   test_sampling_ignores_endpoints_outer_pixels_and_interior();

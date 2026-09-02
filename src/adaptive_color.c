@@ -7,6 +7,8 @@
 #define ADAPTIVE_COLOR_MAX_SIDE_SAMPLES \
   ((ADAPTIVE_COLOR_IMAGE_WIDTH - 2u * ADAPTIVE_COLOR_ENDPOINT_SKIP) \
    * ADAPTIVE_COLOR_INNER_DEPTH)
+#define ADAPTIVE_COLOR_ALL_SIDES_MASK \
+  ((uint8_t)((1u << ADAPTIVE_COLOR_SIDE_COUNT) - 1u))
 
 const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_BLACK_WHITE = {
   .on_light = ADAPTIVE_COLOR_BLACK,
@@ -14,6 +16,7 @@ const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_BLACK_WHITE = {
   .initial_threshold = ADAPTIVE_COLOR_INITIAL_THRESHOLD,
   .switch_to_on_light_threshold = ADAPTIVE_COLOR_SWITCH_TO_BLACK_THRESHOLD,
   .switch_to_on_dark_threshold = ADAPTIVE_COLOR_SWITCH_TO_WHITE_THRESHOLD,
+  .uniform = false,
 };
 
 const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_FOCUS = {
@@ -22,6 +25,7 @@ const struct adaptive_color_palette ADAPTIVE_COLOR_PALETTE_FOCUS = {
   .initial_threshold = 0.417738520,
   .switch_to_on_light_threshold = 0.46,
   .switch_to_on_dark_threshold = 0.38,
+  .uniform = true,
 };
 
 struct adaptive_color_region {
@@ -109,6 +113,28 @@ static int adaptive_color_palette_is_valid(
          && palette->switch_to_on_light_threshold <= 1.0;
 }
 
+static int adaptive_color_is_palette_color(
+    const struct adaptive_color_palette* palette,
+    uint32_t color) {
+  return color == palette->on_light || color == palette->on_dark;
+}
+
+static int adaptive_color_uniform_previous(
+    const struct adaptive_color_palette* palette,
+    const struct adaptive_color_cache* previous,
+    uint32_t* color) {
+  if (!previous
+      || previous->valid_mask != ADAPTIVE_COLOR_ALL_SIDES_MASK
+      || !adaptive_color_is_palette_color(palette, previous->colors[0])) {
+    return 0;
+  }
+  for (size_t side = 1; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+    if (previous->colors[side] != previous->colors[0]) return 0;
+  }
+  if (color) *color = previous->colors[0];
+  return 1;
+}
+
 enum adaptive_color_status adaptive_color_select(
     const struct adaptive_color_palette* palette,
     double luminance,
@@ -191,23 +217,49 @@ enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
 
   struct adaptive_color_cache previous_copy = { 0 };
   if (previous) previous_copy = *previous;
-  previous_copy.valid_mask &= (uint8_t)((1u << ADAPTIVE_COLOR_SIDE_COUNT) - 1u);
-  for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
-    uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
-    if ((previous_copy.valid_mask & side_mask)
-        && previous_copy.colors[side] != palette->on_light
-        && previous_copy.colors[side] != palette->on_dark) {
-      previous_copy.valid_mask &= (uint8_t)~side_mask;
+
+  uint32_t uniform_previous_color = 0;
+  int uniform_has_previous = 0;
+  if (palette->uniform) {
+    uniform_has_previous = adaptive_color_uniform_previous(
+        palette,
+        previous,
+        &uniform_previous_color);
+    previous_copy.valid_mask = uniform_has_previous
+                               ? ADAPTIVE_COLOR_ALL_SIDES_MASK
+                               : 0;
+  } else {
+    previous_copy.valid_mask &= ADAPTIVE_COLOR_ALL_SIDES_MASK;
+    for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+      uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
+      if ((previous_copy.valid_mask & side_mask)
+          && !adaptive_color_is_palette_color(
+              palette,
+              previous_copy.colors[side])) {
+        previous_copy.valid_mask &= (uint8_t)~side_mask;
+      }
     }
   }
 
   struct adaptive_color_result next = { 0 };
-  next.cache_mask = previous_copy.valid_mask;
-  for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
-    uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
-    next.colors[side] = previous_copy.valid_mask & side_mask
-                        ? previous_copy.colors[side]
-                        : fallback_copy[side];
+  if (palette->uniform) {
+    uint32_t initial_color = uniform_has_previous
+                             ? uniform_previous_color
+                             : fallback_copy[0];
+    for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+      next.colors[side] = initial_color;
+    }
+    next.cache_mask = uniform_has_previous
+                      ? ADAPTIVE_COLOR_ALL_SIDES_MASK
+                      : 0;
+  } else {
+    next.cache_mask = previous_copy.valid_mask;
+    for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+      uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
+      next.colors[side] = previous_copy.valid_mask & side_mask
+                          ? previous_copy.colors[side]
+                          : fallback_copy[side];
+    }
   }
 
   const size_t endpoint = ADAPTIVE_COLOR_ENDPOINT_SKIP;
@@ -232,6 +284,8 @@ enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
   build_linear_srgb_lut(lut);
 
   double samples[ADAPTIVE_COLOR_MAX_SIDE_SAMPLES];
+  double side_luminances[ADAPTIVE_COLOR_SIDE_COUNT];
+  size_t sampled_side_count = 0;
   for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
     struct adaptive_color_region region = regions[side];
     size_t region_size = (region.x_end - region.x_begin)
@@ -246,8 +300,14 @@ enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
 
     uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
     double luminance = median_luminance(samples, sample_count);
-    uint32_t old_effective_color = next.colors[side];
     next.luminance[side] = luminance;
+    next.sampled_mask |= side_mask;
+    if (palette->uniform) {
+      side_luminances[sampled_side_count++] = luminance;
+      continue;
+    }
+
+    uint32_t old_effective_color = next.colors[side];
     status = adaptive_color_select(
         palette,
         luminance,
@@ -255,11 +315,28 @@ enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
         previous_copy.colors[side],
         &next.colors[side]);
     if (status != ADAPTIVE_COLOR_OK) return status;
-    next.sampled_mask |= side_mask;
     next.cache_mask |= side_mask;
     if (next.colors[side] != old_effective_color) {
       next.changed_mask |= side_mask;
     }
+  }
+
+  if (palette->uniform && sampled_side_count > 0) {
+    double luminance = median_luminance(side_luminances, sampled_side_count);
+    uint32_t color = 0;
+    status = adaptive_color_select(palette,
+                                   luminance,
+                                   uniform_has_previous,
+                                   uniform_previous_color,
+                                   &color);
+    if (status != ADAPTIVE_COLOR_OK) return status;
+    for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+      if (next.colors[side] != color) {
+        next.changed_mask |= ADAPTIVE_COLOR_SIDE_MASK(side);
+      }
+      next.colors[side] = color;
+    }
+    next.cache_mask = ADAPTIVE_COLOR_ALL_SIDES_MASK;
   }
 
   *result = next;

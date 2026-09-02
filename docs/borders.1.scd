@@ -44,19 +44,25 @@ verification boundary.
 	Controls automatic contrast colors for the focused window. The default
 	_off_ preserves _active_color_. _active_ samples pixels just inside each
 	window edge and independently selects pure black or pure white for each
-	edge. _focus_ instead uses _0xffe5484d_ for bright window edges and
-	_0xffe1e3e4_ for dark window edges. Inactive windows continue to use
-	_inactive_color_. A recommended local example is: borders
+	edge. _focus_ instead combines luminance from all usable edges and applies
+	one color to the entire focused ring: _0xffe5484d_ (#E5484D) when the window
+	edge is bright overall, or _0xffe1e3e4_ (#E1E3E4) when it is dark overall.
+	The four edges never mix red and gray-white in _focus_ mode. Inactive windows
+	continue to use _inactive_color_. A recommended local example is: borders
 	adaptive_color=focus active_color=0xffe5484d width=5.0.
 
 	Both sampling modes require macOS screen-recording permission and are
 	event-driven after focus, window creation or unhide, resize, and the final
 	Space-recovery attempt. Scrolling and video playback alone do not trigger a
-	new sample. An edge with insufficient valid pixels keeps its last sampled
-	color, or falls back to _active_color_ if it has no cache. If permission is
+	new sample. In _focus_ mode, invalid edges are excluded and the remaining
+	usable edges still produce one color for the whole ring. If no edge is usable,
+	the ring keeps its previous consistent _focus_ color when available; otherwise
+	the entire ring falls back uniformly to _active_color_. If permission is
 	unavailable or a capture or analysis ultimately fails, the sampled cache is
-	cleared and the border falls back to _active_color_. This process-wide setting
-	cannot be combined with _apply-to=<window-id>_.
+	cleared and the entire ring falls back uniformly to _active_color_. This
+	fallback uses the first color from a multi-edge _active_color_, or the midpoint
+	of a gradient. This process-wide setting cannot be combined with
+	_apply-to=<window-id>_.
 
 *inactive_color=<color>*
 	Sets the border color for all windows not in focus.

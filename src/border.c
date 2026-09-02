@@ -30,13 +30,46 @@ struct settings* border_get_settings(struct border* border) {
          : &g_settings;
 }
 
+static void border_fill_adaptive_colors(
+    uint32_t colors[ADAPTIVE_COLOR_SIDE_COUNT],
+    uint32_t color) {
+  for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+    colors[side] = color;
+  }
+}
+
+static bool border_focus_cache_is_uniform(
+    const struct adaptive_color_cache* cache) {
+  uint8_t all_sides = (uint8_t)((1u << ADAPTIVE_COLOR_SIDE_COUNT) - 1u);
+  if (!cache || cache->valid_mask != all_sides) return false;
+  if (cache->colors[0] != ADAPTIVE_COLOR_FOCUS_ON_LIGHT
+      && cache->colors[0] != ADAPTIVE_COLOR_FOCUS_ON_DARK) return false;
+  for (size_t side = 1; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+    if (cache->colors[side] != cache->colors[0]) return false;
+  }
+  return true;
+}
+
 void border_adaptive_fallback_colors(
     struct border* border,
     uint32_t colors[ADAPTIVE_COLOR_SIDE_COUNT]) {
   if (!border || !colors) return;
   struct color_style* style = &border_get_settings(border)->active_window;
   if (style->stype == COLOR_STYLE_SOLID) {
+    if (g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_FOCUS) {
+      border_fill_adaptive_colors(colors, style->colors[0]);
+      return;
+    }
     memcpy(colors, style->colors, sizeof(style->colors));
+    return;
+  }
+
+  if (g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_FOCUS) {
+    border_fill_adaptive_colors(
+        colors,
+        border_interpolate_color(style->gradient.color1,
+                                 style->gradient.color2,
+                                 2));
     return;
   }
 
@@ -262,17 +295,23 @@ static bool border_draw(struct border* border,
   struct color_style color_style = border->focused
                                    ? settings->active_window
                                    : settings->inactive_window;
+  bool focus_mode = g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_FOCUS;
+  bool adaptive_cache_valid = focus_mode
+                              ? border_focus_cache_is_uniform(
+                                    &border->adaptive_color_cache)
+                              : border->adaptive_color_cache.valid_mask != 0;
   if (border->focused
       && adaptive_color_mode_is_enabled(g_settings.adaptive_color)
-      && border->adaptive_color_cache.valid_mask) {
+      && (adaptive_cache_valid || focus_mode)) {
     uint32_t fallback[ADAPTIVE_COLOR_SIDE_COUNT];
     border_adaptive_fallback_colors(border, fallback);
     color_style.stype = COLOR_STYLE_SOLID;
     color_style.glow = false;
     for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
       uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
-      color_style.colors[side] = border->adaptive_color_cache.valid_mask
-                                 & side_mask
+      color_style.colors[side] = adaptive_cache_valid
+                                 && (border->adaptive_color_cache.valid_mask
+                                     & side_mask)
                                  ? border->adaptive_color_cache.colors[side]
                                  : fallback[side];
     }
