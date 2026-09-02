@@ -34,6 +34,7 @@ JB_TEMP_PLIST_BACKUP=""
 JB_TEMP_LINK_DIR=""
 JB_TEMP_SIGNING_IDENTITY_FILE=""
 JB_TEMP_SIGNING_DIR=""
+JB_TEMP_SCREEN_CAPTURE_DIR=""
 JB_NEW_SIGNING_IDENTITY=""
 
 jb_cleanup() {
@@ -54,6 +55,11 @@ jb_cleanup() {
   if [[ -n "$JB_TEMP_SIGNING_DIR" && -d "$JB_TEMP_SIGNING_DIR" ]]; then
     if [[ "$JB_TEMP_SIGNING_DIR" == "$JB_INSTALL_ROOT/.signing-bootstrap."* ]]; then
       /bin/rm -R "$JB_TEMP_SIGNING_DIR" 2>/dev/null || true
+    fi
+  fi
+  if [[ -n "$JB_TEMP_SCREEN_CAPTURE_DIR" && -d "$JB_TEMP_SCREEN_CAPTURE_DIR" ]]; then
+    if [[ "$JB_TEMP_SCREEN_CAPTURE_DIR" == "$JB_INSTALL_ROOT/.screen-capture."* ]]; then
+      /bin/rm -R "$JB_TEMP_SCREEN_CAPTURE_DIR" 2>/dev/null || true
     fi
   fi
   if [[ -n "$JB_TEMP_VERSION_DIR" && -d "$JB_TEMP_VERSION_DIR" ]]; then
@@ -1212,6 +1218,12 @@ jb_screen_capture_utility() {
   local jb_schema
   local jb_recorded_identity
   local jb_app
+  local jb_old_umask
+  local jb_stdout
+  local jb_stderr
+  local jb_launcher_stderr
+  local jb_attempt=0
+  local jb_result=0
 
   jb_preflight_installed_service
   jb_current_root="$(/usr/bin/readlink "$JB_CURRENT_VERSION_LINK")"
@@ -1226,11 +1238,49 @@ jb_screen_capture_utility() {
     || jb_die "current app was not signed by the configured identity"
   jb_app="$jb_current_root/$JB_APP_NAME"
 
-  /usr/bin/open -W -n -g \
-    -o /dev/stdout \
-    --stderr /dev/stderr \
-    "$jb_app" \
-    --args "$jb_option"
+  jb_old_umask="$(umask)"
+  umask 077
+  JB_TEMP_SCREEN_CAPTURE_DIR="$(/usr/bin/mktemp -d \
+    "$JB_INSTALL_ROOT/.screen-capture.XXXXXX")"
+  umask "$jb_old_umask"
+  /bin/chmod 0700 "$JB_TEMP_SCREEN_CAPTURE_DIR"
+  jb_stdout="$JB_TEMP_SCREEN_CAPTURE_DIR/stdout"
+  jb_stderr="$JB_TEMP_SCREEN_CAPTURE_DIR/stderr"
+  jb_launcher_stderr="$JB_TEMP_SCREEN_CAPTURE_DIR/launcher-stderr"
+  : >"$jb_stdout"
+  : >"$jb_stderr"
+  : >"$jb_launcher_stderr"
+
+  # LaunchServices rejects character devices such as /dev/stdout for app
+  # stdio on current macOS releases. Capture through private regular files,
+  # then relay the utility result to this command.
+  if ! /usr/bin/open -n -g \
+      -o "$jb_stdout" \
+      --stderr "$jb_stderr" \
+      "$jb_app" \
+      --args "$jb_option" 2>"$jb_launcher_stderr"; then
+    /bin/cat "$jb_launcher_stderr" >&2
+    jb_die "could not launch the installed app for screen-capture permission"
+  fi
+
+  while [[ ! -s "$jb_stdout" && ! -s "$jb_stderr" ]]; do
+    ((jb_attempt += 1))
+    [[ "$jb_attempt" -lt 3000 ]] \
+      || jb_die "timed out waiting for the screen-capture permission utility"
+    /bin/sleep 0.1
+  done
+
+  if [[ -s "$jb_stderr" ]]; then
+    /bin/cat "$jb_stderr" >&2
+    jb_result=1
+  else
+    /bin/cat "$jb_stdout"
+  fi
+
+  /bin/rm "$jb_stdout" "$jb_stderr" "$jb_launcher_stderr"
+  /bin/rmdir "$JB_TEMP_SCREEN_CAPTURE_DIR"
+  JB_TEMP_SCREEN_CAPTURE_DIR=""
+  return "$jb_result"
 }
 
 jb_stop_service() {
