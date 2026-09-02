@@ -69,6 +69,16 @@ struct adaptive_color_cache {
   uint8_t valid_mask;
 };
 
+/*
+ * Uniform focus colors use this state to reject a one-frame color change.
+ * A different color must be returned by two successive successful samples
+ * before replacing the last known-good cache.
+ */
+struct adaptive_color_switch_confirmation {
+  uint32_t candidate;
+  bool pending;
+};
+
 struct adaptive_color_result {
   /* Resolved colors: fresh sample, then previous cache, then fallback. */
   uint32_t colors[ADAPTIVE_COLOR_SIDE_COUNT];
@@ -127,3 +137,22 @@ enum adaptive_color_status adaptive_color_select(
     int has_previous,
     uint32_t previous,
     uint32_t* color);
+
+/* Return whether cache is complete, uniform, and belongs to palette. */
+bool adaptive_color_uniform_cache_color(
+    const struct adaptive_color_palette* palette,
+    const struct adaptive_color_cache* cache,
+    uint32_t* color);
+
+void adaptive_color_switch_confirmation_reset(
+    struct adaptive_color_switch_confirmation* confirmation);
+
+/*
+ * Return true when proposed may replace current. Initial colors and unchanged
+ * colors are accepted immediately; a different color needs two matching calls.
+ */
+bool adaptive_color_switch_confirmation_accept(
+    struct adaptive_color_switch_confirmation* confirmation,
+    bool current_valid,
+    uint32_t current,
+    uint32_t proposed);

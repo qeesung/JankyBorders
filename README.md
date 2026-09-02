@@ -182,13 +182,15 @@ Both sampling modes are event-driven: they run after focus, window creation or
 unhide, resize, and the final Space-recovery attempt. They intentionally do not
 capture continuously, so scrolling and video playback alone do not update the
 border. In `focus` mode, invalid edges are excluded and the remaining usable
-edges still produce one color for the whole ring. If no edge is usable, the
-ring keeps its previous consistent `focus` color when available; otherwise the
-entire ring falls back uniformly to `active_color`. If permission is unavailable
-or a capture or analysis ultimately fails, the sampled cache is cleared and
-the entire ring falls back uniformly to `active_color`. A multi-edge
-`active_color` uses its first color for this fallback; a gradient uses its
-midpoint color.
+edges still produce one color for the whole ring. Once a consistent color has
+been established, a partial-edge sample cannot replace it; a different color
+must be confirmed by two complete successful samples. If no edge is usable or
+a capture or analysis temporarily fails, the ring keeps its previous consistent
+color until a later successful sample. Before the first successful sample, the
+entire ring falls back uniformly to `active_color`. A
+multi-edge `active_color` uses its first color for this fallback; a gradient uses
+its midpoint color. Losing screen-recording permission still disables sampling
+and returns to the configured fallback.
 
 Both sampling modes require macOS screen-recording permission. The user service
 never opens the permission prompt at login. Check or request permission

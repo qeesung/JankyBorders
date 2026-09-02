@@ -20,6 +20,7 @@ extern struct table g_windows;
 #define ADAPTIVE_RESIZE_DEBOUNCE_MS UINT64_C(150)
 #define ADAPTIVE_RETRY_DELAY_MS UINT64_C(250)
 #define ADAPTIVE_MIN_CAPTURE_INTERVAL_MS UINT64_C(250)
+#define ADAPTIVE_COLOR_CONFIRM_DELAY_MS UINT64_C(250)
 #define ADAPTIVE_NS_PER_MS UINT64_C(1000000)
 
 static struct adaptive_pending_capture adaptive_pending;
@@ -86,12 +87,16 @@ static bool windows_adaptive_token_is_current(
 
 static void windows_adaptive_schedule_pump(uint64_t serial,
                                            uint64_t delay_ns);
+static void windows_adaptive_schedule_border(struct border* border,
+                                             uint64_t debounce_ms);
 
 static void windows_adaptive_invalidate_border(struct border* border,
                                                 bool clear_cache) {
   if (!border) return;
   border->adaptive_generation = windows_adaptive_next_generation();
   adaptive_pending_cancel_window(&adaptive_pending, border->target_wid);
+  adaptive_color_switch_confirmation_reset(
+      &border->adaptive_color_confirmation);
   if (clear_cache && border->adaptive_color_cache.valid_mask) {
     border->adaptive_color_cache.valid_mask = 0;
     border->needs_redraw = true;
@@ -163,24 +168,57 @@ static void windows_adaptive_capture_complete(
              && result->analysis_status == ADAPTIVE_COLOR_OK) {
     uint8_t next_mask = result->analysis.cache_mask
                         & (uint8_t)((1u << ADAPTIVE_COLOR_SIDE_COUNT) - 1u);
-    bool changed = next_mask != border->adaptive_color_cache.valid_mask;
-    for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
-      uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
-      if ((next_mask & side_mask)
-          && (!(border->adaptive_color_cache.valid_mask & side_mask)
-              || border->adaptive_color_cache.colors[side]
-                 != result->analysis.colors[side])) {
-        changed = true;
-      }
-      if (next_mask & side_mask) {
-        border->adaptive_color_cache.colors[side]
-            = result->analysis.colors[side];
+    bool commit_result = true;
+    if (g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_FOCUS) {
+      struct adaptive_color_cache proposed = { .valid_mask = next_mask };
+      memcpy(proposed.colors,
+             result->analysis.colors,
+             sizeof(proposed.colors));
+      uint32_t current_color = 0;
+      uint32_t proposed_color = 0;
+      bool current_valid = adaptive_color_uniform_cache_color(
+          &ADAPTIVE_COLOR_PALETTE_FOCUS,
+          &border->adaptive_color_cache,
+          &current_color);
+      bool proposed_valid = adaptive_color_uniform_cache_color(
+          &ADAPTIVE_COLOR_PALETTE_FOCUS,
+          &proposed,
+          &proposed_color);
+      if (proposed_valid) {
+        commit_result = adaptive_color_switch_confirmation_accept(
+            &border->adaptive_color_confirmation,
+            current_valid,
+            current_color,
+            proposed_color);
+      } else {
+        adaptive_color_switch_confirmation_reset(
+            &border->adaptive_color_confirmation);
       }
     }
-    border->adaptive_color_cache.valid_mask = next_mask;
-    if (changed) {
-      border->needs_redraw = true;
-      border_update(border, true);
+
+    if (!commit_result) {
+      windows_adaptive_schedule_border(border,
+                                       ADAPTIVE_COLOR_CONFIRM_DELAY_MS);
+    } else {
+      bool changed = next_mask != border->adaptive_color_cache.valid_mask;
+      for (size_t side = 0; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
+        uint8_t side_mask = ADAPTIVE_COLOR_SIDE_MASK(side);
+        if ((next_mask & side_mask)
+            && (!(border->adaptive_color_cache.valid_mask & side_mask)
+                || border->adaptive_color_cache.colors[side]
+                   != result->analysis.colors[side])) {
+          changed = true;
+        }
+        if (next_mask & side_mask) {
+          border->adaptive_color_cache.colors[side]
+              = result->analysis.colors[side];
+        }
+      }
+      border->adaptive_color_cache.valid_mask = next_mask;
+      if (changed) {
+        border->needs_redraw = true;
+        border_update(border, true);
+      }
     }
   } else if (current
              && windows_adaptive_is_transient(result->status)
@@ -201,7 +239,10 @@ static void windows_adaptive_capture_complete(
              && (windows_adaptive_is_transient(result->status)
                  || result->status == EDGE_SAMPLER_INVALID_IMAGE
                  || result->status == EDGE_SAMPLER_ANALYSIS_FAILED)) {
-    if (border->adaptive_color_cache.valid_mask) {
+    adaptive_color_switch_confirmation_reset(
+        &border->adaptive_color_confirmation);
+    if (g_settings.adaptive_color != ADAPTIVE_COLOR_MODE_FOCUS
+        && border->adaptive_color_cache.valid_mask) {
       border->adaptive_color_cache.valid_mask = 0;
       border->needs_redraw = true;
       border_update(border, true);
@@ -566,7 +607,9 @@ void windows_window_move(struct table* windows, uint32_t wid) {
 void windows_window_hide(struct table* windows, uint32_t wid) {
   struct border* border = table_find(windows, &wid);
   if (border) {
-    windows_adaptive_invalidate_border(border, true);
+    bool keep_focus_cache =
+        g_settings.adaptive_color == ADAPTIVE_COLOR_MODE_FOCUS;
+    windows_adaptive_invalidate_border(border, !keep_focus_cache);
     border_hide(border);
   }
 }

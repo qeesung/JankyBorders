@@ -55,13 +55,16 @@ verification boundary.
 	event-driven after focus, window creation or unhide, resize, and the final
 	Space-recovery attempt. Scrolling and video playback alone do not trigger a
 	new sample. In _focus_ mode, invalid edges are excluded and the remaining
-	usable edges still produce one color for the whole ring. If no edge is usable,
-	the ring keeps its previous consistent _focus_ color when available; otherwise
-	the entire ring falls back uniformly to _active_color_. If permission is
-	unavailable or a capture or analysis ultimately fails, the sampled cache is
-	cleared and the entire ring falls back uniformly to _active_color_. This
-	fallback uses the first color from a multi-edge _active_color_, or the midpoint
-	of a gradient. This process-wide setting cannot be combined with
+	usable edges still produce one color for the whole ring. Once a consistent
+	color exists, a partial-edge sample cannot replace it; a different color must
+	be confirmed by two complete successful samples. If no edge is usable or a
+	capture or analysis temporarily fails, the ring keeps its previous consistent
+	color until a later successful sample. Before the first successful sample, the
+	entire ring falls back uniformly to _active_color_.
+	Losing screen-recording permission still disables sampling and returns to that
+	fallback. It uses the first color from a multi-edge
+	_active_color_, or the midpoint of a gradient. This process-wide setting cannot
+	be combined with
 	_apply-to=<window-id>_.
 
 *inactive_color=<color>*

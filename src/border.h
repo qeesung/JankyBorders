@@ -126,6 +126,7 @@ struct border {
   // WindowServer IDs before touching this cache.
   uint64_t adaptive_generation;
   struct adaptive_color_cache adaptive_color_cache;
+  struct adaptive_color_switch_confirmation adaptive_color_confirmation;
 
   struct settings setting_override;
 };

@@ -214,6 +214,61 @@ static void test_focus_palette_partial_sample_colors_full_border(void) {
          == ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_TOP));
   assert(result.cache_mask == ALL_SIDES_MASK);
   assert_all_colors(&result, focus->on_dark);
+
+  struct adaptive_color_cache previous = {
+    .colors = {
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+    },
+    .valid_mask = ALL_SIDES_MASK,
+  };
+  fill_image(&image, 0, 0, 0, 0);
+  fill_side(&image, ADAPTIVE_COLOR_SIDE_TOP, 255, 255);
+  assert(analyze_with_palette(&image, focus, &previous, &result)
+         == ADAPTIVE_COLOR_OK);
+  assert(result.sampled_mask
+         == ADAPTIVE_COLOR_SIDE_MASK(ADAPTIVE_COLOR_SIDE_TOP));
+  assert(result.cache_mask == ALL_SIDES_MASK);
+  assert(result.changed_mask == 0);
+  assert_all_colors(&result, focus->on_dark);
+}
+
+static void test_focus_color_switch_needs_confirmation(void) {
+  struct adaptive_color_switch_confirmation confirmation = { 0 };
+
+  assert(adaptive_color_switch_confirmation_accept(
+      &confirmation, false, 0, ADAPTIVE_COLOR_FOCUS_ON_DARK));
+  assert(!confirmation.pending);
+
+  assert(!adaptive_color_switch_confirmation_accept(
+      &confirmation,
+      true,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT));
+  assert(confirmation.pending);
+  assert(confirmation.candidate == ADAPTIVE_COLOR_FOCUS_ON_LIGHT);
+
+  /* A noisy return to the current color cancels the candidate. */
+  assert(adaptive_color_switch_confirmation_accept(
+      &confirmation,
+      true,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK));
+  assert(!confirmation.pending);
+
+  assert(!adaptive_color_switch_confirmation_accept(
+      &confirmation,
+      true,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT));
+  assert(adaptive_color_switch_confirmation_accept(
+      &confirmation,
+      true,
+      ADAPTIVE_COLOR_FOCUS_ON_DARK,
+      ADAPTIVE_COLOR_FOCUS_ON_LIGHT));
+  assert(!confirmation.pending);
 }
 
 static void test_focus_palette_hysteresis_uses_uniform_previous_cache(void) {
@@ -674,6 +729,7 @@ int main(void) {
   test_builtin_palettes_and_focus_selector();
   test_focus_palette_on_uniform_and_mixed_edges();
   test_focus_palette_partial_sample_colors_full_border();
+  test_focus_color_switch_needs_confirmation();
   test_focus_palette_hysteresis_uses_uniform_previous_cache();
   test_focus_palette_fallback_and_invalid_cache_filtering();
   test_black_and_white_images_choose_maximum_contrast();

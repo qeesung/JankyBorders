@@ -40,14 +40,9 @@ static void border_fill_adaptive_colors(
 
 static bool border_focus_cache_is_uniform(
     const struct adaptive_color_cache* cache) {
-  uint8_t all_sides = (uint8_t)((1u << ADAPTIVE_COLOR_SIDE_COUNT) - 1u);
-  if (!cache || cache->valid_mask != all_sides) return false;
-  if (cache->colors[0] != ADAPTIVE_COLOR_FOCUS_ON_LIGHT
-      && cache->colors[0] != ADAPTIVE_COLOR_FOCUS_ON_DARK) return false;
-  for (size_t side = 1; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
-    if (cache->colors[side] != cache->colors[0]) return false;
-  }
-  return true;
+  return adaptive_color_uniform_cache_color(&ADAPTIVE_COLOR_PALETTE_FOCUS,
+                                             cache,
+                                             NULL);
 }
 
 void border_adaptive_fallback_colors(

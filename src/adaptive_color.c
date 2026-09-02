@@ -119,20 +119,47 @@ static int adaptive_color_is_palette_color(
   return color == palette->on_light || color == palette->on_dark;
 }
 
-static int adaptive_color_uniform_previous(
+bool adaptive_color_uniform_cache_color(
     const struct adaptive_color_palette* palette,
-    const struct adaptive_color_cache* previous,
+    const struct adaptive_color_cache* cache,
     uint32_t* color) {
-  if (!previous
-      || previous->valid_mask != ADAPTIVE_COLOR_ALL_SIDES_MASK
-      || !adaptive_color_is_palette_color(palette, previous->colors[0])) {
-    return 0;
+  if (!adaptive_color_palette_is_valid(palette)
+      || !cache
+      || cache->valid_mask != ADAPTIVE_COLOR_ALL_SIDES_MASK
+      || !adaptive_color_is_palette_color(palette, cache->colors[0])) {
+    return false;
   }
   for (size_t side = 1; side < ADAPTIVE_COLOR_SIDE_COUNT; ++side) {
-    if (previous->colors[side] != previous->colors[0]) return 0;
+    if (cache->colors[side] != cache->colors[0]) return false;
   }
-  if (color) *color = previous->colors[0];
-  return 1;
+  if (color) *color = cache->colors[0];
+  return true;
+}
+
+void adaptive_color_switch_confirmation_reset(
+    struct adaptive_color_switch_confirmation* confirmation) {
+  if (!confirmation) return;
+  confirmation->candidate = 0;
+  confirmation->pending = false;
+}
+
+bool adaptive_color_switch_confirmation_accept(
+    struct adaptive_color_switch_confirmation* confirmation,
+    bool current_valid,
+    uint32_t current,
+    uint32_t proposed) {
+  if (!confirmation) return true;
+  if (!current_valid || current == proposed) {
+    adaptive_color_switch_confirmation_reset(confirmation);
+    return true;
+  }
+  if (confirmation->pending && confirmation->candidate == proposed) {
+    adaptive_color_switch_confirmation_reset(confirmation);
+    return true;
+  }
+  confirmation->candidate = proposed;
+  confirmation->pending = true;
+  return false;
 }
 
 enum adaptive_color_status adaptive_color_select(
@@ -221,7 +248,7 @@ enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
   uint32_t uniform_previous_color = 0;
   int uniform_has_previous = 0;
   if (palette->uniform) {
-    uniform_has_previous = adaptive_color_uniform_previous(
+    uniform_has_previous = adaptive_color_uniform_cache_color(
         palette,
         previous,
         &uniform_previous_color);
@@ -322,6 +349,18 @@ enum adaptive_color_status adaptive_color_analyze_bgra_with_palette(
   }
 
   if (palette->uniform && sampled_side_count > 0) {
+    /*
+     * A side crosses its validity threshold as one discrete unit. If a valid
+     * side temporarily disappears, the median of the remaining sides can jump
+     * across both hysteresis thresholds even though the window did not change.
+     * Bootstrap from any usable edge, but only replace an established uniform
+     * color when all four edges participated in the sample.
+     */
+    if (uniform_has_previous
+        && next.sampled_mask != ADAPTIVE_COLOR_ALL_SIDES_MASK) {
+      *result = next;
+      return ADAPTIVE_COLOR_OK;
+    }
     double luminance = median_luminance(side_luminances, sampled_side_count);
     uint32_t color = 0;
     status = adaptive_color_select(palette,
