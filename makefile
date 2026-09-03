@@ -39,6 +39,8 @@ test: | bin
 	./bin/geometry_test
 	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/space_recovery_test.c -o bin/space_recovery_test
 	./bin/space_recovery_test
+	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/focus_recovery_test.c -o bin/focus_recovery_test
+	./bin/focus_recovery_test
 	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test -framework CoreVideo
 	./bin/animation_lifecycle_test
 	clang -std=c99 -Wall -Wextra -Werror -O0 -g tests/adaptive_color_test.c src/adaptive_color.c -o bin/adaptive_color_test
@@ -63,6 +65,8 @@ test-sanitize: | bin
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/geometry_test_sanitize
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/space_recovery_test.c -o bin/space_recovery_test_sanitize
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/space_recovery_test_sanitize
+	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/focus_recovery_test.c -o bin/focus_recovery_test_sanitize
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/focus_recovery_test_sanitize
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/animation_lifecycle_test.c -o bin/animation_lifecycle_test_sanitize -framework CoreVideo
 	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ./bin/animation_lifecycle_test_sanitize
 	clang -std=c99 -Wall -Wextra -Werror -O1 -g $(SANITIZER_FLAGS) tests/adaptive_color_test.c src/adaptive_color.c -o bin/adaptive_color_test_sanitize

@@ -20,7 +20,15 @@ void windows_add_existing_windows(struct table* windows);
 void windows_draw_borders_on_current_spaces(struct table* windows);
 void windows_refresh_after_space_change(struct table* windows,
                                         bool final_retry);
-void windows_determine_and_focus_active_window(struct table* windows);
+enum windows_focus_refresh_result {
+  WINDOWS_FOCUS_REFRESH_APPLIED,
+  WINDOWS_FOCUS_REFRESH_HELD,
+  WINDOWS_FOCUS_REFRESH_CLEARED,
+};
+void windows_focus_probe_reset(void);
+enum windows_focus_refresh_result windows_refresh_active_window(
+    struct table* windows,
+    bool allow_clear);
 void windows_recreate_all_borders(struct table* windows);
 void windows_adaptive_mode_changed(struct table* windows,
                                    enum adaptive_color_mode previous,

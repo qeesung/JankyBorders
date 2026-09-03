@@ -26,10 +26,20 @@ static void test_helper_migrates_on_sid_change_and_bounded_retry(void) {
   assert(!border_space_should_migrate(11, 0, 11, true));
 }
 
+static void test_focus_waits_for_fresh_matching_helper_space(void) {
+  assert(!border_space_ready_for_focus(false, false, false, 11, 11));
+  assert(!border_space_ready_for_focus(false, false, true, 11, 10));
+  assert(!border_space_ready_for_focus(false, false, true, 0, 0));
+  assert(border_space_ready_for_focus(false, false, true, 11, 11));
+  assert(border_space_ready_for_focus(false, true, false, 0, 0));
+  assert(border_space_ready_for_focus(true, false, false, 0, 0));
+}
+
 int main(void) {
   test_retry_plan_is_bounded_and_increasing();
   test_stale_retry_generations_are_cancelled();
   test_helper_migrates_on_sid_change_and_bounded_retry();
+  test_focus_waits_for_fresh_matching_helper_space();
   puts("space recovery tests passed");
   return 0;
 }

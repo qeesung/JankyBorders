@@ -27,3 +27,15 @@ static inline bool border_space_should_migrate(uint64_t previous_target_sid,
          && helper_sid != target_sid
          && (target_sid != previous_target_sid || retry);
 }
+
+static inline bool border_space_ready_for_focus(bool is_proxy,
+                                                bool sticky,
+                                                bool target_space_known,
+                                                uint64_t target_sid,
+                                                uint64_t helper_sid) {
+  return is_proxy
+         || sticky
+         || (target_space_known
+             && target_sid != 0
+             && helper_sid == target_sid);
+}

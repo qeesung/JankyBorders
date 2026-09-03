@@ -137,7 +137,7 @@ void border_destroy(struct border* border);
 
 void border_move(struct border* border);
 void border_retry_space_migration(struct border* border);
-void border_update(struct border* border, bool try_async);
+bool border_update(struct border* border, bool try_async);
 void border_hide(struct border* border);
 void border_unhide(struct border* border);
 void border_adaptive_fallback_colors(

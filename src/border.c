@@ -2,6 +2,7 @@
 #include "hashtable.h"
 #include "misc/extern.h"
 #include "windows.h"
+#include <math.h>
 #include <pthread.h>
 #include <time.h>
 
@@ -125,9 +126,21 @@ static CGRect border_display_frame(CGRect window_frame) {
 }
 
 static bool border_calculate_bounds(struct border* border, CGRect* frame, struct settings* settings) {
-  CGRect window_frame;
+  CGRect window_frame = CGRectNull;
   if (border->is_proxy) window_frame = border->target_bounds;
-  else SLSGetWindowBounds(border->cid, border->target_wid, &window_frame);
+  else if (SLSGetWindowBounds(border->cid,
+                              border->target_wid,
+                              &window_frame) != kCGErrorSuccess) {
+    return false;
+  }
+  if (!isfinite(window_frame.origin.x)
+      || !isfinite(window_frame.origin.y)
+      || !isfinite(window_frame.size.width)
+      || !isfinite(window_frame.size.height)
+      || window_frame.size.width <= 0.0
+      || window_frame.size.height <= 0.0) {
+    return false;
+  }
 
   border->target_bounds = window_frame;
   CGRect display_frame = settings->border_position == BORDER_POSITION_AUTO
@@ -501,11 +514,11 @@ void border_create_window(struct border* border, CGRect frame, bool unmanaged, b
   pthread_mutex_unlock(&border->mutex);
 }
 
-static void border_refresh_space(struct border* border, bool retry_helpers) {
-  if (border->is_proxy) return;
+static bool border_refresh_space(struct border* border, bool retry_helpers) {
+  if (border->is_proxy) return true;
 
   uint64_t sid = window_direct_space_id(border->cid, border->target_wid);
-  if (!sid) return;
+  if (!sid) return false;
 
   uint64_t previous_sid = border->sid;
   bool sid_changed = sid != previous_sid;
@@ -532,30 +545,32 @@ static void border_refresh_space(struct border* border, bool retry_helpers) {
   if (sid_changed) {
     debug("Window %u moved to Space %llu\n", border->target_wid, sid);
   }
+  return true;
 }
 
-void border_update_internal(struct border* border, struct settings* settings) {
-  border_refresh_space(border, false);
-  if (border->external_proxy_wid) return;
+bool border_update_internal(struct border* border, struct settings* settings) {
+  bool target_space_known = border_refresh_space(border, false);
+  if (border->external_proxy_wid) return true;
   if (settings->border_style == BORDER_STYLE_NONE) {
     border_hide(border);
-    return;
+    return false;
   }
 
   int cid = border->cid;
+  bool update_succeeded = false;
   CGRect frame;
-  if (!border_calculate_bounds(border, &frame, settings)) return;
+  if (!border_calculate_bounds(border, &frame, settings)) return false;
 
   uint64_t tags = window_tags(cid, border->target_wid);
   border->sticky = tags & WINDOW_TAG_STICKY;
-  if (!border->sticky && !is_space_visible(cid, border->sid)) return;
+  if (!border->sticky && !is_space_visible(cid, border->sid)) return false;
 
 
   bool shown = false;
   SLSWindowIsOrderedIn(cid, border->target_wid, &shown);
   if (!shown && !border->is_proxy) {
     border_hide(border);
-    return;
+    return false;
   } 
 
   int level = window_level(cid, border->target_wid);
@@ -566,13 +581,33 @@ void border_update_internal(struct border* border, struct settings* settings) {
                          frame,
                          border->is_proxy,
                          settings->hidpi  );
-    if (!border->wid || !border->context) return;
+    if (!border->wid || !border->context) return false;
+  }
+
+  // Focus is not committed until its helper has actually reached the target
+  // Space. Space moves are asynchronous on recent macOS versions, so merely
+  // submitting the move is not evidence that the border can be seen yet. A
+  // cached target SID is likewise insufficient during a display transition.
+  if (border->focused) {
+    uint64_t helper_sid = border->is_proxy || border->sticky
+                          ? 0
+                          : window_direct_space_id(cid, border->wid);
+    if (!border_space_ready_for_focus(border->is_proxy,
+                                      border->sticky,
+                                      target_space_known,
+                                      border->sid,
+                                      helper_sid)) {
+      if (target_space_known && border->sid) {
+        window_recover_to_space(cid, border->wid, border->sid);
+      }
+      return false;
+    }
   }
 
   bool updates_disabled = false;
   bool window_frozen = false;
   if (!CGRectEqualToRect(frame, border->frame)) {
-    if (SLSDisableUpdate(cid) != kCGErrorSuccess) return;
+    if (SLSDisableUpdate(cid) != kCGErrorSuccess) return false;
     updates_disabled = true;
 
     CFTypeRef frame_region = NULL;
@@ -608,24 +643,42 @@ void border_update_internal(struct border* border, struct settings* settings) {
 
   CFTypeRef transaction = SLSTransactionCreate(cid);
   if (!transaction) goto update_cleanup;
-  SLSTransactionMoveWindowWithGroup(transaction, border->wid, border->origin);
+  CGError transaction_setup_error = SLSTransactionMoveWindowWithGroup(
+      transaction,
+      border->wid,
+      border->origin);
 
-  if (!border->is_proxy) {
+  if (transaction_setup_error == kCGErrorSuccess && !border->is_proxy) {
     CGAffineTransform transform = CGAffineTransformIdentity;
     transform.tx = -border->origin.x;
     transform.ty = -border->origin.y;
-    SLSTransactionSetWindowTransform(transaction,
-                                     border->wid,
-                                     0,
-                                     0,
-                                     transform   );
+    transaction_setup_error = SLSTransactionSetWindowTransform(transaction,
+                                                                border->wid,
+                                                                0,
+                                                                0,
+                                                                transform);
   }
-  SLSTransactionSetWindowLevel(transaction, border->wid, level);
-  SLSTransactionSetWindowSubLevel(transaction, border->wid, sub_level);
-  SLSTransactionOrderWindow(transaction,
-                            border->wid,
-                            border->effective_order,
-                            border->target_wid      );
+  if (transaction_setup_error == kCGErrorSuccess) {
+    transaction_setup_error = SLSTransactionSetWindowLevel(transaction,
+                                                            border->wid,
+                                                            level);
+  }
+  if (transaction_setup_error == kCGErrorSuccess) {
+    transaction_setup_error = SLSTransactionSetWindowSubLevel(transaction,
+                                                               border->wid,
+                                                               sub_level);
+  }
+  if (transaction_setup_error == kCGErrorSuccess) {
+    transaction_setup_error = SLSTransactionOrderWindow(
+        transaction,
+        border->wid,
+        border->effective_order,
+        border->target_wid);
+  }
+  if (transaction_setup_error != kCGErrorSuccess) {
+    CFRelease(transaction);
+    goto update_cleanup;
+  }
   CGError transaction_error = SLSTransactionCommit(transaction, 0);
   CFRelease(transaction);
   if (transaction_error != kCGErrorSuccess) goto update_cleanup;
@@ -638,12 +691,24 @@ void border_update_internal(struct border* border, struct settings* settings) {
     clear_tags |= (1ULL << 45);
   }
 
-  SLSSetWindowTags(cid, border->wid, &set_tags, 0x40);
-  SLSClearWindowTags(cid, border->wid, &clear_tags, 0x40);
+  CGError set_tags_error = SLSSetWindowTags(cid,
+                                            border->wid,
+                                            &set_tags,
+                                            0x40);
+  CGError clear_tags_error = SLSClearWindowTags(cid,
+                                                border->wid,
+                                                &clear_tags,
+                                                0x40);
+  if (set_tags_error != kCGErrorSuccess
+      || clear_tags_error != kCGErrorSuccess) {
+    goto update_cleanup;
+  }
+  update_succeeded = true;
 
 update_cleanup:
   if (window_frozen) SLSWindowThaw(cid, border->wid);
   if (updates_disabled) SLSReenableUpdate(cid);
+  return update_succeeded;
 }
 
 bool border_init(struct border* border, int cid) {
@@ -735,16 +800,17 @@ void border_move(struct border* border) {
 
 void border_retry_space_migration(struct border* border) {
   pthread_mutex_lock(&border->mutex);
-  border_refresh_space(border, true);
+  (void)border_refresh_space(border, true);
   pthread_mutex_unlock(&border->mutex);
 }
 
-void border_update(struct border* border, bool try_async) {
+bool border_update(struct border* border, bool try_async) {
   (void)try_async;
   pthread_mutex_lock(&border->mutex);
   struct settings* settings = border_get_settings(border);
-  border_update_internal(border, settings);
+  bool update_succeeded = border_update_internal(border, settings);
   pthread_mutex_unlock(&border->mutex);
+  return update_succeeded;
 }
 
 void border_hide(struct border* border) {
@@ -765,7 +831,7 @@ void border_hide(struct border* border) {
 
 void border_unhide(struct border* border) {
   pthread_mutex_lock(&border->mutex);
-  border_refresh_space(border, false);
+  (void)border_refresh_space(border, false);
   struct settings* settings = border_get_settings(border);
   if (settings->border_style == BORDER_STYLE_NONE
       || border->too_small

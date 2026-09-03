@@ -148,6 +148,10 @@ static void message_handler(void* data, uint32_t len) {
 
   if (update_mask & BORDER_UPDATE_MASK_RECREATE_ALL) {
     windows_recreate_all_borders(&g_windows);
+    // Helper creation and Space assignment are asynchronous. Reuse the
+    // bounded consistency series so runtime hidpi/active-only/filter changes
+    // cannot leave the recreated focused helper waiting for another event.
+    events_schedule_space_refresh();
   } else if (update_mask & BORDER_UPDATE_MASK_ALL) {
     windows_update_all(&g_windows);
   } else if (update_mask & BORDER_UPDATE_MASK_ACTIVE) {

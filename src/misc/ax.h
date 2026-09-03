@@ -17,23 +17,38 @@ static inline bool ax_check_trust(bool silent) {
 }
 
 static inline uint32_t ax_get_front_window(int cid) {
-  if (!g_ax_trust && !ax_check_trust(false))
+  if (!g_ax_trust && !ax_check_trust(false)) {
     error("In order to use 'ax_focus=on', the process must be trusted with"
           " accessibility permissions.\n");
+    return 0;
+  }
 
-  ProcessSerialNumber psn;
-  _SLPSGetFrontProcess(&psn);
-  int target_cid;
-  SLSGetConnectionIDForPSN(cid, &psn, &target_cid);
+  ProcessSerialNumber psn = { 0 };
+  if (_SLPSGetFrontProcess(&psn) != noErr) return 0;
+  int target_cid = 0;
+  if (SLSGetConnectionIDForPSN(cid, &psn, &target_cid)
+          != kCGErrorSuccess
+      || target_cid <= 0) {
+    return 0;
+  }
 
-  pid_t pid;
-  SLSConnectionGetPID(target_cid, &pid);
+  pid_t pid = 0;
+  if (SLSConnectionGetPID(target_cid, &pid) != kCGErrorSuccess || pid <= 0) {
+    return 0;
+  }
 
   AXUIElementRef app = AXUIElementCreateApplication(pid);
+  if (!app) return 0;
   CFTypeRef window = NULL;
-  AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, &window);
+  AXError copy_error = AXUIElementCopyAttributeValue(
+      app,
+      kAXFocusedWindowAttribute,
+      &window);
   CFRelease(app);
-  if (!window) return 0;
+  if (copy_error != kAXErrorSuccess || !window) {
+    if (window) CFRelease(window);
+    return 0;
+  }
   uint32_t wid = 0;
   _AXUIElementGetWindow(window, &wid);
   CFRelease(window);
