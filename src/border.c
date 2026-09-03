@@ -643,45 +643,34 @@ bool border_update_internal(struct border* border, struct settings* settings) {
 
   CFTypeRef transaction = SLSTransactionCreate(cid);
   if (!transaction) goto update_cleanup;
-  CGError transaction_setup_error = SLSTransactionMoveWindowWithGroup(
-      transaction,
-      border->wid,
-      border->origin);
+  // The SkyLight transaction mutators and commit routine do not expose a
+  // reliable status result on current macOS releases. In particular, macOS 26
+  // leaves an arbitrary value in the return register even when the operation
+  // was queued and committed successfully. Treating that value as CGError
+  // aborts the transaction before a fullscreen helper can leave its initial
+  // (-9999, -9999) position.
+  SLSTransactionMoveWindowWithGroup(transaction,
+                                    border->wid,
+                                    border->origin);
 
-  if (transaction_setup_error == kCGErrorSuccess && !border->is_proxy) {
+  if (!border->is_proxy) {
     CGAffineTransform transform = CGAffineTransformIdentity;
     transform.tx = -border->origin.x;
     transform.ty = -border->origin.y;
-    transaction_setup_error = SLSTransactionSetWindowTransform(transaction,
-                                                                border->wid,
-                                                                0,
-                                                                0,
-                                                                transform);
+    SLSTransactionSetWindowTransform(transaction,
+                                     border->wid,
+                                     0,
+                                     0,
+                                     transform);
   }
-  if (transaction_setup_error == kCGErrorSuccess) {
-    transaction_setup_error = SLSTransactionSetWindowLevel(transaction,
-                                                            border->wid,
-                                                            level);
-  }
-  if (transaction_setup_error == kCGErrorSuccess) {
-    transaction_setup_error = SLSTransactionSetWindowSubLevel(transaction,
-                                                               border->wid,
-                                                               sub_level);
-  }
-  if (transaction_setup_error == kCGErrorSuccess) {
-    transaction_setup_error = SLSTransactionOrderWindow(
-        transaction,
-        border->wid,
-        border->effective_order,
-        border->target_wid);
-  }
-  if (transaction_setup_error != kCGErrorSuccess) {
-    CFRelease(transaction);
-    goto update_cleanup;
-  }
-  CGError transaction_error = SLSTransactionCommit(transaction, 0);
+  SLSTransactionSetWindowLevel(transaction, border->wid, level);
+  SLSTransactionSetWindowSubLevel(transaction, border->wid, sub_level);
+  SLSTransactionOrderWindow(transaction,
+                            border->wid,
+                            border->effective_order,
+                            border->target_wid);
+  SLSTransactionCommit(transaction, 0);
   CFRelease(transaction);
-  if (transaction_error != kCGErrorSuccess) goto update_cleanup;
 
   uint64_t set_tags = (1ULL << 1) | (1ULL << 9);
   uint64_t clear_tags = 0;

@@ -90,19 +90,11 @@ static struct border* yabai_proxy_create_candidate(struct border* border) {
 }
 
 static bool yabai_restore_parent_alpha(struct border* border) {
-  CFTypeRef transaction = SLSTransactionCreate(border->cid);
-  CGError error = kCGErrorFailure;
-  if (transaction) {
-    error = SLSTransactionSetWindowAlpha(transaction, border->wid, 1.f);
-    if (error == kCGErrorSuccess) {
-      error = SLSTransactionCommit(transaction, 0);
-    }
-    CFRelease(transaction);
-  }
-  if (error != kCGErrorSuccess) {
-    error = SLSSetWindowAlpha(border->cid, border->wid, 1.f);
-  }
-  return error == kCGErrorSuccess;
+  // This is a single-window restore, so use the direct API whose CGError is
+  // meaningful. The transaction variant leaves an unspecified return value in
+  // the register on macOS 26 and cannot be used as a success predicate.
+  return SLSSetWindowAlpha(border->cid, border->wid, 1.f)
+         == kCGErrorSuccess;
 }
 
 static void yabai_retry_parent_alpha(struct table* windows,
@@ -192,29 +184,14 @@ static bool yabai_proxy_activate(struct border* border,
     pthread_mutex_unlock(&proxy->mutex);
     return false;
   }
-  CGError setup_error = SLSTransactionOrderWindow(transaction,
-                                                   proxy->wid,
-                                                   proxy->effective_order,
-                                                   external_proxy_wid);
-  if (setup_error == kCGErrorSuccess) {
-    setup_error = SLSTransactionSetWindowAlpha(transaction,
-                                               border->wid,
-                                               0.f);
-  }
-  if (setup_error == kCGErrorSuccess) {
-    setup_error = SLSTransactionSetWindowAlpha(transaction,
-                                               proxy->wid,
-                                               1.f);
-  }
-  CGError error = setup_error == kCGErrorSuccess
-                  ? SLSTransactionCommit(transaction, 0)
-                  : setup_error;
+  SLSTransactionOrderWindow(transaction,
+                            proxy->wid,
+                            proxy->effective_order,
+                            external_proxy_wid);
+  SLSTransactionSetWindowAlpha(transaction, border->wid, 0.f);
+  SLSTransactionSetWindowAlpha(transaction, proxy->wid, 1.f);
+  SLSTransactionCommit(transaction, 0);
   CFRelease(transaction);
-  if (error != kCGErrorSuccess) {
-    animation_stop(&proxy->animation);
-    pthread_mutex_unlock(&proxy->mutex);
-    return false;
-  }
 
   pthread_mutex_unlock(&proxy->mutex);
   return true;
