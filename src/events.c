@@ -15,11 +15,20 @@ static volatile bool space_transition_active;
 // SkyLight notifications are drained by the main CFRunLoop in main.c and all
 // delayed probes target the main dispatch queue, so this state is serialized.
 static struct focus_recovery_scheduler focus_refresh_scheduler;
+static void events_schedule_focus_refresh(bool invalidate_fallback);
 
 static void events_cancel_focus_refresh(void) {
   __sync_add_and_fetch(&focus_change_generation, 1);
   focus_recovery_scheduler_cancel(&focus_refresh_scheduler);
   windows_focus_probe_reset();
+}
+
+static void events_restart_focus_refresh(void) {
+  // A front-application notification is a state boundary, not another noisy
+  // window update. Anchor a fresh bounded series here so it cannot be folded
+  // into probes that began for the previously active application.
+  events_cancel_focus_refresh();
+  events_schedule_focus_refresh(true);
 }
 
 static void events_schedule_focus_refresh(bool invalidate_fallback) {
@@ -148,7 +157,9 @@ static void window_modify_handler(uint32_t event,
   } else if (event == EVENT_WINDOW_REORDER) {
     debug("Window Reorder (and focus): %d\n", wid);
     windows_window_update(windows, wid);
-    events_schedule_focus_refresh(true);
+    // A reorder can switch between two windows of the same application, so
+    // treat it as the same hard boundary as an application activation.
+    events_restart_focus_refresh();
   } else if (event == EVENT_WINDOW_LEVEL) {
     debug("Window Level: %d\n", wid);
     windows_window_update(windows, wid);
@@ -170,9 +181,21 @@ static void window_modify_handler(uint32_t event,
   }
 }
 
-static void front_app_handler() {
+static void front_app_handler(uint32_t event,
+                              void* data,
+                              size_t data_length,
+                              void* context) {
+  (void)event;
+  (void)data;
+  (void)data_length;
+  (void)context;
   debug("Window Focus\n");
-  events_schedule_focus_refresh(true);
+  events_restart_focus_refresh();
+}
+
+void events_workspace_did_activate(void) {
+  debug("Workspace Application Activated\n");
+  events_restart_focus_refresh();
 }
 
 static volatile uint64_t space_change_generation;
@@ -207,7 +230,14 @@ void events_schedule_space_refresh(void) {
   }
 }
 
-static void space_handler() {
+static void space_handler(uint32_t event,
+                          void* data,
+                          size_t data_length,
+                          void* context) {
+  (void)event;
+  (void)data;
+  (void)data_length;
+  (void)context;
   space_transition_active = true;
   windows_adaptive_space_change_started(&g_windows);
   events_schedule_space_refresh();

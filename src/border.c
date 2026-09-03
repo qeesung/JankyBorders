@@ -575,6 +575,17 @@ bool border_update_internal(struct border* border, struct settings* settings) {
 
   int level = window_level(cid, border->target_wid);
   int sub_level = window_sub_level(cid, border->target_wid);
+  int helper_sub_level = sub_level;
+  if (border->focused
+      && !border->is_proxy
+      && border->effective_order == BORDER_ORDER_ABOVE
+      && sub_level < INT_MAX) {
+    // Relative ordering alone can be ignored when WindowServer reorders the
+    // front window on another display. A one-step sublevel offset preserves
+    // the focused above relationship; the next inactive update restores the
+    // target sublevel so inactive borders retain their normal stacking.
+    helper_sub_level++;
+  }
 
   if (!border->wid) {
     border_create_window(border,
@@ -664,7 +675,9 @@ bool border_update_internal(struct border* border, struct settings* settings) {
                                      transform);
   }
   SLSTransactionSetWindowLevel(transaction, border->wid, level);
-  SLSTransactionSetWindowSubLevel(transaction, border->wid, sub_level);
+  SLSTransactionSetWindowSubLevel(transaction,
+                                  border->wid,
+                                  helper_sub_level);
   SLSTransactionOrderWindow(transaction,
                             border->wid,
                             border->effective_order,

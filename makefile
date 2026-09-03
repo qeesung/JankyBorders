@@ -1,4 +1,4 @@
-FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c src/screen_capture.c src/adaptive_color.c src/edge_sampler.m src/space_bridge.m
+FILES = src/main.c src/parse.c src/mach.c src/hashtable.c src/events.c src/windows.c src/border.c src/animation.c src/screen_capture.c src/adaptive_color.c src/edge_sampler.m src/space_bridge.m src/workspace_events.m
 HEADERS = $(wildcard src/*.h src/misc/*.h)
 LIBS = -framework AppKit -framework CoreVideo -framework ScreenCaptureKit -F/System/Library/PrivateFrameworks/ -framework SkyLight
 SAFETY_TEST_FILES = tests/safety_tests.c src/parse.c src/mach.c src/hashtable.c

@@ -1,6 +1,7 @@
 #include "border.h"
 #include "hashtable.h"
 #include "events.h"
+#include "workspace_events.h"
 #include "misc/extern.h"
 #include "windows.h"
 #include "mach.h"
@@ -286,6 +287,7 @@ int main(int argc, char** argv) {
 
   int cid = SLSMainConnectionID();
   events_register(cid);
+  workspace_events_register();
 
   mach_port_t port;
   CGError err = SLSGetEventPort(cid, &port);
